@@ -21,7 +21,26 @@ services:
       timeout: 5s
       retries: 5
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    ports:
+      - "5050:80"                             # pgAdmin UI available at http://localhost:5050
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy            # Wait until postgres passes its healthcheck before starting.
+                                              # Without this, pgAdmin could boot before Postgres is ready to accept connections.
+    volumes:
+      # Persists pgAdmin settings across restarts: saved server connections, query history, preferences.
+      # Without this volume, you'd have to re-register the Postgres server every time the container restarts.
+      - pgadmin_data:/var/lib/pgadmin
+
 volumes:
   postgres_data:
-
-
+  # Both containers share the default Docker network created by Compose.
+  # pgAdmin reaches Postgres using the service name "postgres" as the hostname, not localhost.
+  # localhost inside pgAdmin's container refers to pgAdmin itself, not the host machine.
+  pgadmin_data:
