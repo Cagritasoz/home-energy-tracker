@@ -14,9 +14,8 @@ public class UserService {
 
     private final UserRepository userRepository;
 
-
+    // TODO: Check already existing emails then save.
     public UserDto createUser(UserDto inputUser) {
-        log.info("Creating user {}", inputUser);
 
         final User user = User.builder()
                 .firstName(inputUser.getFirstName())
@@ -29,7 +28,38 @@ public class UserService {
 
         final User saved = userRepository.save(user); // id populated.
 
-        return toDto(user);
+        return toDto(saved);
+    }
+
+    // TODO: Handle thrown exceptions with a @RestControllerAdvice
+    public UserDto getUserById(Long id) throws IllegalArgumentException {
+
+        User foundUser = userRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("User not found!"));
+        return toDto(foundUser);
+    }
+
+    public UserDto updateUser(Long id, UserDto userDto) throws IllegalArgumentException {
+
+        User foundUser = userRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("User not found!")); // Found user is managed
+
+        foundUser.setFirstName(userDto.getFirstName());
+        foundUser.setLastName(userDto.getLastName());
+        foundUser.setEmail(userDto.getEmail());
+        foundUser.setAddress(userDto.getAddress());
+        foundUser.setAlertsEnabled(userDto.isAlertsEnabled());
+        foundUser.setEnergyAlertingThreshold(userDto.getEnergyAlertingThreshold());
+
+        return toDto(userRepository.save(foundUser));
+
+    }
+
+    public void deleteUser(Long id) throws IllegalArgumentException {
+
+        User foundUser = userRepository.findById(id)
+                        .orElseThrow(() -> new IllegalArgumentException("User not found!"));
+        userRepository.delete(foundUser);
     }
 
     private UserDto toDto(User user) {
