@@ -31,7 +31,7 @@ services:
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
     depends_on:
       postgres:
-        condition: service_healthy            # Wait until postgres passes its healthcheck before starting.
+        condition: service_healthy            # Wait until postgres passes its health check before starting.
                                               # Without this, pgAdmin could boot before Postgres is ready to accept connections.
     volumes:
       # Persists pgAdmin settings across restarts: saved server connections, query history, preferences.

@@ -13,10 +13,8 @@ import java.util.Arrays;
 @Slf4j
 public class LoggingAspect {
 
-    // TODO: Order the aspects. Have @Around wrap the whole thing.
-
     // All methods under service package.
-    @Pointcut("execution(* com.cagritasoz.user_service.service.*.*(..))")
+    @Pointcut("execution(* com.cagritasoz.user_service.service..*.*(..))")
     public void serviceMethods() {}
 
     @Before("serviceMethods()")

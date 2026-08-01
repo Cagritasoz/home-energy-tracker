@@ -16,8 +16,11 @@ public class UserController {
 
     @PostMapping
     public ResponseEntity<UserDto> createUser(@RequestBody UserDto userDto) {
+
         UserDto createdUser = userService.createUser(userDto);
+
         return ResponseEntity.status(HttpStatus.CREATED).body(createdUser);
+
     }
 
     @GetMapping("/{id}")
@@ -25,41 +28,27 @@ public class UserController {
 
         final UserDto foundUser;
 
-        try {
+        foundUser = userService.getUserById(id);
 
-            foundUser = userService.getUserById(id);
-
-            return ResponseEntity.ok(foundUser);
-
-        }
-        catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
+        return ResponseEntity.ok(foundUser);
 
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<UserDto> updateUser(@PathVariable Long id,
                                               @RequestBody UserDto userDto) {
-        try {
-            UserDto updatedUser = userService.updateUser(id, userDto);
-            return ResponseEntity.ok(updatedUser);
-        }
-        catch(IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
+
+        UserDto updatedUser = userService.updateUser(id, userDto);
+
+        return ResponseEntity.ok(updatedUser);
+
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteUser(@PathVariable Long id) {
-        try {
-            userService.deleteUser(id);
-            return ResponseEntity.noContent().build();
-        }
-        catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
-        }
+
+        userService.deleteUser(id);
+
+        return ResponseEntity.noContent().build();
     }
-
-
 }

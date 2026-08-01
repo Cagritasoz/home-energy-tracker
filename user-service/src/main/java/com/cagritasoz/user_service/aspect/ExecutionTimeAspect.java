@@ -14,9 +14,11 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class ExecutionTimeAspect {
 
-    @Pointcut("execution(* com.cagritasoz.user_service.controller.*.*(..))")
+    @Pointcut("execution(* com.cagritasoz.user_service.controller..*.*(..))")
     public void controllerMethods() {}
 
+
+    //Includes the logging time of the service methods.
     @Around("controllerMethods()")
     public Object measureExecutionTime(ProceedingJoinPoint pjp) throws Throwable {
         long start = System.nanoTime();
