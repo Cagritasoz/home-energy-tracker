@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.service;
 
 import com.cagritasoz.user_service.dto.UserDto;
 import com.cagritasoz.user_service.entity.User;
+import com.cagritasoz.user_service.exception.UserNotFoundException;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,18 +32,17 @@ public class UserService {
         return toDto(saved);
     }
 
-    // TODO: Handle thrown exceptions with a @RestControllerAdvice
-    public UserDto getUserById(Long id) throws IllegalArgumentException {
+    public UserDto getUserById(Long id) {
 
         User foundUser = userRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("User not found!"));
+                .orElseThrow(() -> new UserNotFoundException("User not found!"));
         return toDto(foundUser);
     }
 
-    public UserDto updateUser(Long id, UserDto userDto) throws IllegalArgumentException {
+    public UserDto updateUser(Long id, UserDto userDto) {
 
         User foundUser = userRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("User not found!")); // Found user is managed
+                .orElseThrow(() -> new UserNotFoundException("User not found!")); // Found user is managed
 
         foundUser.setFirstName(userDto.getFirstName());
         foundUser.setLastName(userDto.getLastName());
@@ -55,10 +55,10 @@ public class UserService {
 
     }
 
-    public void deleteUser(Long id) throws IllegalArgumentException {
+    public void deleteUser(Long id) {
 
         User foundUser = userRepository.findById(id)
-                        .orElseThrow(() -> new IllegalArgumentException("User not found!"));
+                        .orElseThrow(() -> new UserNotFoundException("User not found!"));
         userRepository.delete(foundUser);
     }
 
