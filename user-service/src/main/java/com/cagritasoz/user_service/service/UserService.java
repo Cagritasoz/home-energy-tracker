@@ -7,6 +7,7 @@ import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Slf4j
@@ -16,6 +17,7 @@ public class UserService {
     private final UserRepository userRepository;
 
     // TODO: Check already existing emails then save.
+    @Transactional
     public UserDto createUser(UserDto inputUser) {
 
         final User user = User.builder()
@@ -32,6 +34,7 @@ public class UserService {
         return toDto(saved);
     }
 
+    @Transactional(readOnly = true)
     public UserDto getUserById(Long id) {
 
         User foundUser = userRepository.findById(id)
@@ -39,6 +42,7 @@ public class UserService {
         return toDto(foundUser);
     }
 
+    @Transactional
     public UserDto updateUser(Long id, UserDto userDto) {
 
         User foundUser = userRepository.findById(id)
@@ -55,6 +59,7 @@ public class UserService {
 
     }
 
+    @Transactional
     public void deleteUser(Long id) {
 
         User foundUser = userRepository.findById(id)
