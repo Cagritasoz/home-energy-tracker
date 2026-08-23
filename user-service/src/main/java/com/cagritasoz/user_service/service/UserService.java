@@ -70,8 +70,6 @@ public class UserService {
         foundUser.setAlertsEnabled(userDto.isAlertsEnabled());
         foundUser.setEnergyAlertingThreshold(userDto.getEnergyAlertingThreshold());
 
-        return toDto(userRepository.save(foundUser));
-
         // No explicit save needed: foundUser is managed, so Hibernate's dirty
         // checking flushes these changes automatically at transaction commit.
         // UPDATE keyword is used not INSERT.
