@@ -31,7 +31,7 @@ public class ExecutionTimeAspect {
             long elapsedMilliSeconds = TimeUnit.NANOSECONDS.toMillis(elapsedNanoSeconds);
             log.info("Thread: [{}] called controller method: [{}] executed in: [{}]ms",
                     Thread.currentThread().getName(),
-                    pjp.getSignature().getName(),
+                    pjp.getSignature().toShortString(),
                     elapsedMilliSeconds);
         }
     }

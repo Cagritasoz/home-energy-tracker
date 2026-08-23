@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.service;
 
 import com.cagritasoz.user_service.dto.UserDto;
 import com.cagritasoz.user_service.entity.User;
+import com.cagritasoz.user_service.exception.DuplicateEmailException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -16,9 +17,15 @@ public class UserService {
 
     private final UserRepository userRepository;
 
-    // TODO: Check already existing emails then save.
     @Transactional
     public UserDto createUser(UserDto inputUser) {
+
+        // Fast-path check: gives a clean, typed error in the common (non-racing) case
+        // instead of letting a DB round-trip fail. NOT sufficient on its own — see
+        // the DataIntegrityViolationException handler in GlobalExceptionHandler for why.
+        if (userRepository.existsByEmail(inputUser.getEmail())) {
+            throw new DuplicateEmailException("Email already in use: " + inputUser.getEmail());
+        }
 
         final User user = User.builder()
                 .firstName(inputUser.getFirstName())
@@ -48,6 +55,14 @@ public class UserService {
         User foundUser = userRepository.findById(id)
                 .orElseThrow(() -> new UserNotFoundException("User not found!")); // Found user is managed
 
+        // Only check when the email is actually changing - otherwise a user keeping
+        // their own email would always "collide" with themselves since existsByEmail() would always return true.
+        // A user changing their email could collide with existing emails, if email has changed pre-check is necessary.
+        boolean emailChanged = !foundUser.getEmail().equals(userDto.getEmail());
+        if (emailChanged && userRepository.existsByEmail(userDto.getEmail())) {
+            throw new DuplicateEmailException("Email already in use: " + userDto.getEmail());
+        }
+
         foundUser.setFirstName(userDto.getFirstName());
         foundUser.setLastName(userDto.getLastName());
         foundUser.setEmail(userDto.getEmail());
@@ -57,6 +72,10 @@ public class UserService {
 
         return toDto(userRepository.save(foundUser));
 
+        // No explicit save needed: foundUser is managed, so Hibernate's dirty
+        // checking flushes these changes automatically at transaction commit.
+        // UPDATE keyword is used not INSERT.
+        return toDto(foundUser);
     }
 
     @Transactional

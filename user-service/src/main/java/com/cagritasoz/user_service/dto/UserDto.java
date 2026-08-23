@@ -6,6 +6,8 @@ import jakarta.validation.constraints.Size;
 import lombok.Builder;
 import lombok.Data;
 
+// Jackson matches JSON keys to fields by exact name (no snake_case conversion),
+// so "first_name" won't bind to firstName unless a naming strategy/@JsonProperty is added.
 @Data
 @Builder
 public class UserDto {
