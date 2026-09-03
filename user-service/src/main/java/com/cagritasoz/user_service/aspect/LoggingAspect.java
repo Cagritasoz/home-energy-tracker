@@ -21,7 +21,7 @@ public class LoggingAspect {
     public void logBefore(JoinPoint joinPoint) {
         log.info("Thread: [{}] called service method: [{}] with arguments: [{}]",
                 Thread.currentThread().getName(),
-                joinPoint.getSignature().getName(),
+                joinPoint.getSignature().toShortString(),
                 Arrays.toString(joinPoint.getArgs()));
 
     }
@@ -31,11 +31,17 @@ public class LoggingAspect {
     public void logAfter(JoinPoint joinPoint, Object result) { // Object "result" should match returning = "result"
         log.info("Thread: [{}] called service method: [{}] returned: [{}]",
                 Thread.currentThread().getName(),
-                joinPoint.getSignature().getName(),
+                joinPoint.getSignature().toShortString(),
                 result);
     }
 
-
-
+    // Does not intercept/swallow the exception - it just observes it as it propagates, so no rethrow needed.
+    @AfterThrowing(pointcut = "serviceMethods()", throwing = "ex")
+    public void logAfterThrowing(JoinPoint joinPoint, Throwable ex) {
+        log.error("Thread: [{}] service method: [{}] threw exception: [{}]",
+                Thread.currentThread().getName(),
+                joinPoint.getSignature().toShortString(),
+                ex.getMessage());
+    }
 
 }

@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.controller;
 
 import com.cagritasoz.user_service.dto.UserDto;
 import com.cagritasoz.user_service.service.UserService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -15,7 +16,7 @@ public class UserController {
     private final UserService userService;
 
     @PostMapping
-    public ResponseEntity<UserDto> createUser(@RequestBody UserDto userDto) {
+    public ResponseEntity<UserDto> createUser(@Valid @RequestBody UserDto userDto) {
 
         UserDto createdUser = userService.createUser(userDto);
 
@@ -36,7 +37,7 @@ public class UserController {
 
     @PutMapping("/{id}")
     public ResponseEntity<UserDto> updateUser(@PathVariable Long id,
-                                              @RequestBody UserDto userDto) {
+                                              @Valid @RequestBody UserDto userDto) {
 
         UserDto updatedUser = userService.updateUser(id, userDto);
 
