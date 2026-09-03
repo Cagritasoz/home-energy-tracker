@@ -10,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Objects;
+
 @Service
 @Slf4j
 @RequiredArgsConstructor
@@ -24,7 +26,7 @@ public class UserService {
         // instead of letting a DB round-trip fail. NOT sufficient on its own — see
         // the DataIntegrityViolationException handler in GlobalExceptionHandler for why.
         if (userRepository.existsByEmail(inputUser.getEmail())) {
-            throw new DuplicateEmailException("Email already in use: " + inputUser.getEmail());
+            throw new DuplicateEmailException("Email already in use!");
         }
 
         final User user = User.builder()
@@ -32,8 +34,13 @@ public class UserService {
                 .lastName(inputUser.getLastName())
                 .email(inputUser.getEmail())
                 .address(inputUser.getAddress())
-                .alertsEnabled(inputUser.isAlertsEnabled())
-                .energyAlertingThreshold(inputUser.getEnergyAlertingThreshold())
+                // DTO fields are optional (client may omit them) - Lombok's @Builder does NOT
+                // apply the entity's own field-initializer defaults (= false / = 0.0) unless
+                // @Builder.Default is used, so an explicit fallback is needed here or a null
+                // reaches the NOT NULL alerts_enabled/energy_alerting_threshold columns triggering a DataIntegrityViolationException which fires up "Email already in use".
+                // A complete nonsense of a response.
+                .alertsEnabled(Objects.requireNonNullElse(inputUser.getAlertsEnabled(), Boolean.FALSE))
+                .energyAlertingThreshold(Objects.requireNonNullElse(inputUser.getEnergyAlertingThreshold(), 0.0))
                 .build();
 
         final User saved = userRepository.save(user); // id populated.
@@ -60,15 +67,15 @@ public class UserService {
         // A user changing their email could collide with existing emails, if email has changed pre-check is necessary.
         boolean emailChanged = !foundUser.getEmail().equals(userDto.getEmail());
         if (emailChanged && userRepository.existsByEmail(userDto.getEmail())) {
-            throw new DuplicateEmailException("Email already in use: " + userDto.getEmail());
+            throw new DuplicateEmailException("Email already in use!");
         }
 
         foundUser.setFirstName(userDto.getFirstName());
         foundUser.setLastName(userDto.getLastName());
         foundUser.setEmail(userDto.getEmail());
         foundUser.setAddress(userDto.getAddress());
-        foundUser.setAlertsEnabled(userDto.isAlertsEnabled());
-        foundUser.setEnergyAlertingThreshold(userDto.getEnergyAlertingThreshold());
+        foundUser.setAlertsEnabled(Objects.requireNonNullElse(userDto.getAlertsEnabled(), Boolean.FALSE));
+        foundUser.setEnergyAlertingThreshold(Objects.requireNonNullElse(userDto.getEnergyAlertingThreshold(), 0.0));
 
         // No explicit save needed: foundUser is managed, so Hibernate's dirty
         // checking flushes these changes automatically at transaction commit.

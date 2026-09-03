@@ -23,6 +23,7 @@ public class DeviceDto {
     @Size(max = 100)
     private String deviceName;
 
+    // Enum gives us validation for free, if deviceType field has a value not specified in the DeviceType enum class, HttpMessageNotReadableException is thrown.
     private DeviceType deviceType;
 
     @Size(max = 255)

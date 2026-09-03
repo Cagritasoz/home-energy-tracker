@@ -75,10 +75,10 @@ public class DeviceService {
 
     }
 
+    // user-service being unreachable (connection refused/timeout) throws ResourceAccessException,
+    // not HttpClientErrorException.NotFound, so it isn't caught below - it's left to propagate
+    // and is turned into a 503 by GlobalExceptionHandler instead.
     private boolean userExists(Long userId) {
-        // TODO: user-service being unreachable (connection refused/timeout) throws
-        // ResourceAccessException, not HttpClientErrorException.NotFound, so it isn't caught
-        // below - it currently propagates as an unhandled 500 instead of a clean 503.
         try {
             userServiceRestClient.get()
                     .uri("/api/v1/users/{id}", userId)

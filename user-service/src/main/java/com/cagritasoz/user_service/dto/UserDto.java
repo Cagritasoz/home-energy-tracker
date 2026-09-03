@@ -36,8 +36,9 @@ public class UserDto {
 
     private String address;
 
-    private boolean alertsEnabled;
-    private double energyAlertingThreshold;
+    // Wrapper objects to allow for null since omitting these two fields make sense.
+    private Boolean alertsEnabled;
+    private Double energyAlertingThreshold;
 }
 
 
