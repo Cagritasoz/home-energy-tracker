@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.dto;
 
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -10,6 +11,9 @@ import lombok.Data;
 // so "first_name" won't bind to firstName unless a naming strategy/@JsonProperty is added.
 @Data
 @Builder
+// Jackson 3 (Spring Boot 4) defaults to alphabetical property ordering instead of
+// declaration order, so @JsonPropertyOrder is needed to keep the response field order stable.
+@JsonPropertyOrder({"id", "firstName", "lastName", "email", "address", "alertsEnabled", "energyAlertingThreshold"})
 public class UserDto {
     private Long id;
 
@@ -31,3 +35,5 @@ public class UserDto {
     private boolean alertsEnabled;
     private double energyAlertingThreshold;
 }
+
+
