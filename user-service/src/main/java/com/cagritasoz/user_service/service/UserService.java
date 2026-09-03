@@ -52,7 +52,7 @@ public class UserService {
     @Transactional
     public UserDto updateUser(Long id, UserDto userDto) {
 
-        User foundUser = userRepository.findById(id)
+    User foundUser = userRepository.findById(id)
                 .orElseThrow(() -> new UserNotFoundException("User not found!")); // Found user is managed
 
         // Only check when the email is actually changing - otherwise a user keeping

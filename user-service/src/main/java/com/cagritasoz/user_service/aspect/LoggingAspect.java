@@ -35,7 +35,7 @@ public class LoggingAspect {
                 result);
     }
 
-    // Does not intercept/swallow the exception - it just observes it as it propagates, so no rethrow needed.
+    // Does not intercept/swallow the exception - it just observes it as it propagates, so no rethrow needed. It rethrows it internally!
     @AfterThrowing(pointcut = "serviceMethods()", throwing = "ex")
     public void logAfterThrowing(JoinPoint joinPoint, Throwable ex) {
         log.error("Thread: [{}] service method: [{}] threw exception: [{}]",
