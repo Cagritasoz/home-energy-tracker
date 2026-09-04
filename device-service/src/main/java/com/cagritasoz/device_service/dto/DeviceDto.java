@@ -5,30 +5,24 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 
-@Data
 @Builder
-@NoArgsConstructor
-@AllArgsConstructor
 @JsonPropertyOrder({"id", "deviceName", "deviceType", "location", "userId"})
-public class DeviceDto {
+public record DeviceDto( // All fields are private final by default, LOMBOK @Builder works on record classes.
+        Long id,
 
-    private Long id;
+        @NotBlank
+        @Size(max = 100)
+        String deviceName,
 
-    @NotBlank
-    @Size(max = 100)
-    private String deviceName;
+        // Enum gives us validation for free, if deviceType field has a value not specified in the DeviceType enum class, HttpMessageNotReadableException is thrown.
+        DeviceType deviceType,
 
-    private DeviceType deviceType;
+        @Size(max = 255)
+        String location,
 
-    @Size(max = 255)
-    private String location;
-
-    @NotNull
-    private Long userId;
-
+        @NotNull
+        Long userId
+) {
 }

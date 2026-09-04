@@ -1,6 +1,5 @@
-package com.cagritasoz.user_service.exception;
+package com.cagritasoz.device_service.exception;
 
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -8,6 +7,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -15,24 +15,29 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(DeviceNotFoundException.class)
+    public ProblemDetail handleDeviceNotFoundException(DeviceNotFoundException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
     @ExceptionHandler(UserNotFoundException.class)
     public ProblemDetail handleUserNotFoundException(UserNotFoundException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
     }
 
-    @ExceptionHandler(DuplicateEmailException.class)
-    public ProblemDetail handleDuplicateEmailException(DuplicateEmailException e) {
+    @ExceptionHandler(DeviceOwnerImmutableException.class)
+    public ProblemDetail handleDeviceOwnerImmutableException(DeviceOwnerImmutableException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }
 
-    // Safety net for the TOCTOU race: two concurrent requests can both pass the
-    // existsByEmail() check in UserService before either commits, so the unique
-    // constraint (not the pre-check, database level) is what actually guarantees no duplicates.
-    // Spring translates the underlying org.postgresql.util.PSQLException into this
-    // type via PersistenceExceptionTranslationPostProcessor - see UserService for detail.
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ProblemDetail handleDataIntegrityViolationException(DataIntegrityViolationException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Email already in use.");
+    // Thrown when user-service can't be reached at all (connection refused, timeout) - as
+    // opposed to HttpClientErrorException.NotFound, which means user-service responded and
+    // said the user doesn't exist. This is "can't verify", not "verified as missing", so it's
+    // a 503 (retry later), not a 404.
+    @ExceptionHandler(ResourceAccessException.class)
+    public ProblemDetail handleResourceAccessException(ResourceAccessException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                "Could not reach user-service to verify the user. Please try again later!");
     }
 
     // Handle bean validation exceptions
@@ -44,15 +49,14 @@ public class GlobalExceptionHandler {
             errors.put(fieldError.getField(), fieldError.getDefaultMessage());
         }
 
-        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Validation failed.");
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Validation failed");
         problemDetail.setProperty("errors", errors);
         return problemDetail;
     }
 
     // Thrown when the request body can't even be deserialized into the target DTO - malformed
-    // JSON, wrong types, or (see UserDto) a null/missing value for a primitive field. Runs
-    // before @Valid ever gets a chance to, so it needs its own handler separate from
-    // MethodArgumentNotValidException above.
+    // JSON or wrong types. Runs before @Valid ever gets a chance to, so it needs its own
+    // handler separate from MethodArgumentNotValidException above.
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ProblemDetail handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Malformed request body.");
