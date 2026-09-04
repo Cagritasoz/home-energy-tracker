@@ -22,15 +22,15 @@ public class DeviceService {
     @Transactional
     public DeviceDto createDevice(DeviceDto deviceDto) {
 
-        if (!userExists(deviceDto.getUserId())) {
+        if (!userExists(deviceDto.userId())) {
             throw new UserNotFoundException("User not found!");
         }
 
         final Device device = Device.builder()
-                .deviceName(deviceDto.getDeviceName())
-                .deviceType(deviceDto.getDeviceType())
-                .location(deviceDto.getLocation())
-                .userId(deviceDto.getUserId())
+                .deviceName(deviceDto.deviceName())
+                .deviceType(deviceDto.deviceType())
+                .location(deviceDto.location())
+                .userId(deviceDto.userId())
                 .build();
 
         final Device saved = deviceRepository.save(device);
@@ -53,14 +53,14 @@ public class DeviceService {
         final Device foundDevice = deviceRepository.findById(id)
                 .orElseThrow(() -> new DeviceNotFoundException("Device not found!"));
 
-        boolean userIdChanged = !foundDevice.getUserId().equals(deviceDto.getUserId());
+        boolean userIdChanged = !foundDevice.getUserId().equals(deviceDto.userId());
         if(userIdChanged) {
             throw new DeviceOwnerImmutableException("User ID can not change!");
         }
 
-        foundDevice.setDeviceName(deviceDto.getDeviceName());
-        foundDevice.setDeviceType(deviceDto.getDeviceType());
-        foundDevice.setLocation(deviceDto.getLocation());
+        foundDevice.setDeviceName(deviceDto.deviceName());
+        foundDevice.setDeviceType(deviceDto.deviceType());
+        foundDevice.setLocation(deviceDto.location());
 
         return toDto(foundDevice);
     }
