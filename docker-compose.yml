@@ -38,9 +38,9 @@ services:
       # Without this volume, you'd have to re-register the Postgres server every time the container restarts.
       - pgadmin_data:/var/lib/pgadmin
 
-  kafka:
+  kafka-broker-controller-1:
     image: apache/kafka:latest
-    container_name: kafka
+    container_name: kafka-broker-controller-1
     ports: # Expose container ports to host with host ports.
       - "9092:9092" # Unnecessary since port 9092 is declared as INTERNAL LISTENER under KAFKA_LISTENER, meaning internal container communication should hit port 9092, nothing external needs to reach it.
       - "9094:9094" # Port 9094 is declared as EXTERNAL LISTENER under KAFKA_LISTENERS, localhost://9094 is how to reach this node.
@@ -50,6 +50,12 @@ services:
       # This node's id within the KRaft cluster. Every node (broker, controller, or both)
       # needs a unique one - the KRaft-era generalization of the old KAFKA_BROKER_ID.
       KAFKA_NODE_ID: 1
+
+      # Without this, Kafka falls back to its own internal default (/tmp/kafka-logs) instead of
+      # the kafka_data volume below - meaning topics/messages/KRaft metadata all land in the
+      # container's ephemeral filesystem and vanish on `docker compose down`, while the actual
+      # mounted volume stays empty the whole time. This makes the volume mount actually matter.
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
 
       # Identifies the cluster as a whole, stamped into the storage directory on first boot.
       # ZooKeeper-based Kafka never needed this in broker config since ZK itself was the
@@ -67,7 +73,7 @@ services:
       # node (nodeId@host:port, comma-separated if more than one) so nodes know who
       # participates in the Raft quorum that elects the active controller and replicates
       # cluster metadata - Kafka's own quorum instead of an external ZooKeeper ensemble.
-      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-broker-controller-1:9093'
 
       # Names which of the listeners below (CONTROLLER) carries controller-to-controller
       # Raft traffic, as opposed to listeners serving regular client traffic. Under
@@ -78,24 +84,25 @@ services:
       # --- Listener/networking config (unrelated to ZooKeeper vs KRaft - both setups need this) ---
 
       # The actual addresses/ports Kafka binds to inside the container, one per named
-      # listener: PLAINTEXT for traffic from other containers on the Docker network (9092),
+      # listener: INTERNAL for traffic from other containers on the Docker network (9092),
       # EXTERNAL for traffic from the host machine (9094, matches the port mapping above),
       # CONTROLLER for Raft quorum traffic (9093). 0.0.0.0 means "accept connections on
       # any network interface", needed since both container-to-container and published-port
-      # traffic have to reach this same process.
+      # traffic have to reach this same process. Named INTERNAL rather than PLAINTEXT so the
+      # listener alias never gets confused with PLAINTEXT the security protocol value below.
       KAFKA_LISTENERS: >
-        PLAINTEXT://0.0.0.0:9092,
+        INTERNAL://0.0.0.0:9092,
         EXTERNAL://0.0.0.0:9094,
         CONTROLLER://0.0.0.0:9093
 
       # Different from KAFKA_LISTENERS above: this is what address Kafka tells CLIENTS to
       # use once connected, not what it binds to. A container on the Docker network (your
-      # services) gets told to use the Docker service name 'kafka:9092'; a client on the
+      # services) gets told to use this service's own Docker network name; a client on the
       # host machine (outside Docker, e.g. a local script) gets told 'localhost:9094'
-      # instead, since 'kafka' isn't resolvable there. No CONTROLLER entry here because
-      # clients never connect to the controller listener directly - only other nodes do.
+      # instead, since that service name isn't resolvable there. No CONTROLLER entry here
+      # because clients never connect to the controller listener directly - only other nodes do.
       KAFKA_ADVERTISED_LISTENERS: >
-        PLAINTEXT://kafka:9092,
+        INTERNAL://kafka-broker-controller-1:9092,
         EXTERNAL://localhost:9094
 
       # Maps each named listener to the wire security protocol it actually speaks
@@ -103,14 +110,14 @@ services:
       # PLAINTEXT since this is local dev with no transport security configured.
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: >
         CONTROLLER:PLAINTEXT,
-        PLAINTEXT:PLAINTEXT,
+        INTERNAL:PLAINTEXT,
         EXTERNAL:PLAINTEXT
 
       # Which listener brokers use to replicate partition data between each other (distinct
-      # from the CONTROLLER listener used for metadata/Raft). Pointed at the same PLAINTEXT
+      # from the CONTROLLER listener used for metadata/Raft). Pointed at the same INTERNAL
       # listener client traffic uses, since this is a single-broker setup with nothing else
       # to replicate to yet.
-      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'INTERNAL'
 
       # --- Topic/replication defaults (also unrelated to ZooKeeper vs KRaft) ---
 
@@ -133,18 +140,20 @@ services:
       # consumers become active immediately instead of waiting.
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 
-      # Auto-creates a topic the first time something produces/consumes to a name that
-      # doesn't exist yet, instead of erroring. Convenient for prototyping; usually turned
-      # off in production since it makes topic creation implicit (a typo silently creates
-      # a garbage topic instead of failing loudly).
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      # Off on purpose: topics are declared explicitly as NewTopic beans in the services
+      # that own them instead, so each topic gets its own intended partition count/
+      # replication factor/retention rather than these cluster-wide defaults, and a typo
+      # in a topic name fails loudly instead of silently creating a garbage topic.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
 
       # Default partition count for auto-created topics. 1 is fine for single-broker local
       # dev - more partitions only start mattering once you want parallelism across
       # multiple consumers or brokers.
       KAFKA_NUM_PARTITIONS: 1
     volumes:
-      - ./docker/kafka_data:/var/lib/kafka/data
+      # Named volume, same as postgres_data/pgadmin_data - Docker manages the storage location
+      # itself rather than a project-local folder like ./docker/kafka_data.
+      - kafka_data:/var/lib/kafka/data
 
   kafka-ui:
     container_name: kafka-ui
@@ -152,10 +161,10 @@ services:
     ports:
       - "8070:8080"
     depends_on:
-      - kafka
+      - kafka-broker-controller-1
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092  # Use internal Docker network name
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-broker-controller-1:9092  # Use internal Docker network name
       DYNAMIC_CONFIG_ENABLED: 'true'
     restart: unless-stopped
 

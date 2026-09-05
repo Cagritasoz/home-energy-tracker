@@ -36,6 +36,10 @@
 			<artifactId>spring-boot-starter-kafka</artifactId>
 		</dependency>
 
+		<!-- starter-webmvc Pulls in spring-boot-starter-jackson (Boot 4's rename of the old spring-boot-starter-json)
+		     transitively, so Jackson is already on the classpath without declaring it explicitly.
+		     Jackson 3 also bundles java.time support directly in jackson-databind now, so no
+		     separate jackson-datatype-jsr310 module is needed for Instant/LocalDate/etc. either. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
