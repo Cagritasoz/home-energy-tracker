@@ -51,6 +51,12 @@ services:
       # needs a unique one - the KRaft-era generalization of the old KAFKA_BROKER_ID.
       KAFKA_NODE_ID: 1
 
+      # Without this, Kafka falls back to its own internal default (/tmp/kafka-logs) instead of
+      # the kafka_data volume below - meaning topics/messages/KRaft metadata all land in the
+      # container's ephemeral filesystem and vanish on `docker compose down`, while the actual
+      # mounted volume stays empty the whole time. This makes the volume mount actually matter.
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+
       # Identifies the cluster as a whole, stamped into the storage directory on first boot.
       # ZooKeeper-based Kafka never needed this in broker config since ZK itself was the
       # shared source of cluster identity; without ZK, every node has to be told the same
@@ -134,18 +140,20 @@ services:
       # consumers become active immediately instead of waiting.
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 
-      # Auto-creates a topic the first time something produces/consumes to a name that
-      # doesn't exist yet, instead of erroring. Convenient for prototyping; usually turned
-      # off in production since it makes topic creation implicit (a typo silently creates
-      # a garbage topic instead of failing loudly).
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      # Off on purpose: topics are declared explicitly as NewTopic beans in the services
+      # that own them instead, so each topic gets its own intended partition count/
+      # replication factor/retention rather than these cluster-wide defaults, and a typo
+      # in a topic name fails loudly instead of silently creating a garbage topic.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
 
       # Default partition count for auto-created topics. 1 is fine for single-broker local
       # dev - more partitions only start mattering once you want parallelism across
       # multiple consumers or brokers.
       KAFKA_NUM_PARTITIONS: 1
     volumes:
-      - ./docker/kafka_data:/var/lib/kafka/data
+      # Named volume, same as postgres_data/pgadmin_data - Docker manages the storage location
+      # itself rather than a project-local folder like ./docker/kafka_data.
+      - kafka_data:/var/lib/kafka/data
 
   kafka-ui:
     container_name: kafka-ui
