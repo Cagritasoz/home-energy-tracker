@@ -74,8 +74,16 @@ public class UserService {
         foundUser.setLastName(userDto.lastName());
         foundUser.setEmail(userDto.email());
         foundUser.setAddress(userDto.address());
-        foundUser.setAlertsEnabled(Objects.requireNonNullElse(userDto.alertsEnabled(), Boolean.FALSE));
-        foundUser.setEnergyAlertingThreshold(Objects.requireNonNullElse(userDto.energyAlertingThreshold(), 0.0));
+        // Unlike createUser, a null here means "field omitted from the request", not "explicitly
+        // cleared" - there's no sentinel for that distinction, so the only safe reading is to
+        // leave the already-loaded value alone rather than defaulting it to false/0.0, which
+        // would silently disable alerts on any update that never meant to touch that field.
+        if (userDto.alertsEnabled() != null) {
+            foundUser.setAlertsEnabled(userDto.alertsEnabled());
+        }
+        if (userDto.energyAlertingThreshold() != null) {
+            foundUser.setEnergyAlertingThreshold(userDto.energyAlertingThreshold());
+        }
 
         // No explicit save needed: foundUser is managed, so Hibernate's dirty
         // checking flushes these changes automatically at transaction commit.

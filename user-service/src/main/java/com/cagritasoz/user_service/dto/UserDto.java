@@ -15,17 +15,17 @@ import lombok.Builder;
 public record UserDto(
         Long id,
 
-        @NotBlank
-        @Size(max = 100)
+        @NotBlank(message = "must not be blank")
+        @Size(max = 100, message = "must be at most 100 characters")
         String firstName,
 
-        @NotBlank
-        @Size(max = 100)
+        @NotBlank(message = "must not be blank")
+        @Size(max = 100, message = "must be at most 100 characters")
         String lastName,
 
-        @NotBlank
-        @Email
-        @Size(max = 255)
+        @NotBlank(message = "must not be blank")
+        @Email(message = "must be a well-formed email address")
+        @Size(max = 255, message = "must be at most 255 characters")
         String email,
 
         String address,

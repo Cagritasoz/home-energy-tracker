@@ -13,10 +13,10 @@ import java.time.Instant;
 @JsonPropertyOrder({"deviceId", "consumedEnergy", "timestamp"})
 public record EnergyUsageDto (
 
-        @NotNull
+        @NotNull(message = "must not be null")
         Long deviceId,
 
-        @Positive
+        @Positive(message = "must be positive")
         double consumedEnergy,
 
         // Forces ISO-8601 string output (e.g. "2026-09-03T15:04:51Z") instead of a numeric
@@ -24,7 +24,7 @@ public record EnergyUsageDto (
         // is currently redundant, but it pins the contract explicitly rather than relying on
         // that default holding forever.
         @JsonFormat(shape = JsonFormat.Shape.STRING)
-        @NotNull
+        @NotNull(message = "must not be null")
         Instant timestamp // Instant already includes timezones.
 ) {
 

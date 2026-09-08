@@ -80,9 +80,9 @@ public class ContinuousDataSimulator {
     }
 
     // @Scheduled already resolves ${...} placeholders on its own - no @Value needed here.
-    @Scheduled(fixedDelayString = "${simulation.interval-ms}") // Single threaded by default, does not use Tomcat threads.
+    @Scheduled(initialDelay = 0, fixedDelayString = "${simulation.interval-ms}") // Single threaded by default, does not use Tomcat threads.
     public void sendMockData() {
-        log.info("Running scheduled method");
+        log.info("Running scheduled job");
         for (int i = 0; i < EVENTS_PER_TICK; i++) {
             final Long deviceId = deviceIdPool.get(random.nextInt(deviceIdPool.size()));
 

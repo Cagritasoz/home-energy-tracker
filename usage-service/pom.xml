@@ -30,13 +30,36 @@
 		<java.version>21</java.version>
 	</properties>
 	<dependencies>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-kafka</artifactId>
 		</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+
+		<!-- RestClient's builder alone has no timeout knobs; HttpClientSettings/
+		     ClientHttpRequestFactoryBuilder (used in RestClientConfig, for the device-service
+		     id-cache poller) live here, not in spring-web itself. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-http-client</artifactId>
+		</dependency>
+
+		<!-- Official InfluxDB 3 client (Core/Enterprise/Cloud all share this one artifact, no
+		     separate "v3" vs "v2" split like the old influxdb-client-java had per product).
+		     Queries (not writes) go over Arrow Flight SQL - a gRPC protocol streaming results
+		     back in Apache Arrow's columnar format, InfluxDB 3's SQL engine natively speaks it.
+		     That pulls in Arrow, which manages off-heap memory via JDK internals the module
+		     system blocks by default on Java 17+ - hence the "add opens" JVM flag on
+		     spring-boot-maven-plugin below. Running a packaged jar directly needs it too. -->
+		<dependency>
+			<groupId>com.influxdb</groupId>
+			<artifactId>influxdb3-java</artifactId>
+			<version>1.11.0</version>
 		</dependency>
 
 		<dependency>
@@ -44,24 +67,36 @@
 			<artifactId>lombok</artifactId>
 			<optional>true</optional>
 		</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-kafka-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+
 	</dependencies>
 
 	<build>
+
 		<plugins>
+
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<!-- Required by the influxdb3-java client's Arrow Flight SQL query path - see
+					     the dependency comment above. Only affects "mvnw spring-boot:run"; running
+					     the packaged jar directly still needs the same flag passed to java. -->
+					<jvmArguments>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmArguments>
+				</configuration>
 			</plugin>
+			
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>

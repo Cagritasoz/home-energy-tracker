@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class DeviceService {
@@ -36,6 +38,13 @@ public class DeviceService {
         final Device saved = deviceRepository.save(device);
 
         return toDto(saved);
+    }
+
+    // Backs usage-service's device-id cache - id-only, so it stays cheap even as the device
+    // fleet grows, unlike returning full DeviceDto objects would.
+    @Transactional(readOnly = true)
+    public List<Long> getAllDeviceIds() {
+        return deviceRepository.findAllDeviceIds();
     }
 
     @Transactional(readOnly = true)
