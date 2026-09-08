@@ -25,7 +25,7 @@ public record EnergyUsageDto (
         // that default holding forever.
         @JsonFormat(shape = JsonFormat.Shape.STRING)
         @NotNull
-        Instant timestamp
+        Instant timestamp // Instant already includes timezones.
 ) {
 
 
