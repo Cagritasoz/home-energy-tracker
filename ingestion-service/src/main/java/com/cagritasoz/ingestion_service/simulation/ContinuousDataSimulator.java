@@ -4,6 +4,7 @@ import com.cagritasoz.ingestion_service.dto.EnergyUsageDto;
 import com.cagritasoz.ingestion_service.service.IngestionService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,7 @@ import java.util.Random;
 // TODO: Simulation with multiple threads might be implemented.
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class ContinuousDataSimulator {
 
     private final IngestionService ingestionService;
@@ -69,6 +71,7 @@ public class ContinuousDataSimulator {
     // reclaimed after deletes, so some ids in this range will not exist in device-service's DB -
     // that's intentional, not a bug: it's a stand-in for the "unknown device" case a future
     // usage-service consumer needs to handle anyway, not something this simulator should avoid.
+    // A dead letter queue could be introduced for unprocessable messages.
     @PostConstruct
     void initDeviceIdPool() {
         for (long id = 1; id <= 215; id++) {
@@ -77,8 +80,9 @@ public class ContinuousDataSimulator {
     }
 
     // @Scheduled already resolves ${...} placeholders on its own - no @Value needed here.
-    @Scheduled(fixedDelayString = "${simulation.interval-ms}") // Single threaded by default, does not use Tomcat threads.
+    @Scheduled(initialDelay = 0, fixedDelayString = "${simulation.interval-ms}") // Single threaded by default, does not use Tomcat threads.
     public void sendMockData() {
+        log.info("Running scheduled job");
         for (int i = 0; i < EVENTS_PER_TICK; i++) {
             final Long deviceId = deviceIdPool.get(random.nextInt(deviceIdPool.size()));
 

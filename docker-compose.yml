@@ -21,23 +21,6 @@ services:
       timeout: 5s
       retries: 5
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: pgadmin
-    ports:
-      - "5050:80"                             # pgAdmin UI available at http://localhost:5050
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
-    depends_on:
-      postgres:
-        condition: service_healthy            # Wait until postgres passes its health check before starting.
-                                              # Without this, pgAdmin could boot before Postgres is ready to accept connections.
-    volumes:
-      # Persists pgAdmin settings across restarts: saved server connections, query history, preferences.
-      # Without this volume, you'd have to re-register the Postgres server every time the container restarts.
-      - pgadmin_data:/var/lib/pgadmin
-
   kafka-broker-controller-1:
     image: apache/kafka:latest
     container_name: kafka-broker-controller-1
@@ -151,27 +134,62 @@ services:
       # multiple consumers or brokers.
       KAFKA_NUM_PARTITIONS: 1
     volumes:
-      # Named volume, same as postgres_data/pgadmin_data - Docker manages the storage location
-      # itself rather than a project-local folder like ./docker/kafka_data.
+      # Named volume, same as postgres_data - Docker manages the storage location itself
+      # rather than a project-local folder like ./docker/kafka_data.
       - kafka_data:/var/lib/kafka/data
 
   kafka-ui:
-    container_name: kafka-ui
     image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: kafka-ui
     ports:
       - "8070:8080"
     depends_on:
       - kafka-broker-controller-1
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-broker-controller-1:9092  # Use internal Docker network name
+      # Containers on this compose file's default network reach each other by service name,
+      # not localhost - "localhost" inside kafka-ui's own container means kafka-ui itself, not
+      # the host machine or any sibling container, so this has to be the broker's service name.
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-broker-controller-1:9092
       DYNAMIC_CONFIG_ENABLED: 'true'
     restart: unless-stopped
 
+  # InfluxDB 3 Core - time-series DB usage-service will write energy readings to.
+  #
+  # Auth works differently here than Postgres/2.x: no username+password, no init env vars,
+  # no login UI - every HTTP request instead carries a Bearer token. Nothing to preconfigure
+  # ahead of time; once the container is up, create the one admin token you'll need with:
+  #   docker exec -it influxdb influxdb3 create token --admin
+  # It's printed once and never again, so save it - that's the only "credential" this service has.
+  #
+  # No bucket-creation step either: 3.x calls it a "database" instead of a "bucket", and it's
+  # auto-created on first authenticated write, no explicit create step required - the opposite
+  # default from Kafka above, where KAFKA_AUTO_CREATE_TOPICS_ENABLE is deliberately off.
+  influxdb:
+    image: influxdb:3-core
+    container_name: influxdb
+    ports:
+      - "8181:8181"                              # HTTP API - query/write/admin, all on one port
+    command:
+      - influxdb3
+      - serve
+      - --node-id=node0                          # id of this server instance (multi-node clusters only - unrelated to where data lives)
+      - --object-store=file                       # local disk, same as postgres/kafka elsewhere in this file
+      - --data-dir=/var/lib/influxdb3/data
+    volumes:
+      # Mounted at the parent dir, not .../data: the image pre-owns /var/lib/influxdb3 for its
+      # non-root user, so the volume inherits write access here. Mounting .../data directly
+      # gets a root-owned volume instead, and the server fails to start ("Permission denied").
+      - influxdb_data:/var/lib/influxdb3
+    healthcheck:
+      # /health itself requires a token by default (401 without one) - this only confirms the
+      # HTTP server is answering at all (2xx or 4xx), not that a token has been created yet.
+      test: [ "CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8181/health | grep -qE '^[24]'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
-  # Both containers share the default Docker network created by Compose.
-  # pgAdmin reaches Postgres using the service name "postgres" as the hostname, not localhost.
-  # localhost inside pgAdmin's container refers to pgAdmin itself, not the host machine.
-  pgadmin_data:
   kafka_data:
+  influxdb_data:

@@ -8,12 +8,21 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("api/v1/devices")
 @RequiredArgsConstructor
 public class DeviceController {
 
     private final DeviceService deviceService;
+
+    // Literal "/ids" beats the "/{id}" pattern for its own matches - Spring MVC always prefers
+    // the more specific static segment, so there's no route collision here.
+    @GetMapping("/ids")
+    public ResponseEntity<List<Long>> getAllDeviceIds() {
+        return ResponseEntity.ok(deviceService.getAllDeviceIds());
+    }
 
     @PostMapping
     public ResponseEntity<DeviceDto> createDevice(@Valid @RequestBody DeviceDto deviceDto)  {

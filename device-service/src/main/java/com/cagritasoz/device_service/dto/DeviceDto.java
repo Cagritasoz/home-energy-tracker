@@ -12,17 +12,21 @@ import lombok.Builder;
 public record DeviceDto( // All fields are private final by default, LOMBOK @Builder works on record classes.
         Long id,
 
-        @NotBlank
-        @Size(max = 100)
+        @NotBlank(message = "must not be blank")
+        @Size(max = 100, message = "must be at most 100 characters")
         String deviceName,
 
         // Enum gives us validation for free, if deviceType field has a value not specified in the DeviceType enum class, HttpMessageNotReadableException is thrown.
+        // That failure happens during JSON deserialization, before @Valid ever runs, so it can't
+        // carry a per-field @NotNull-style message here - it surfaces via
+        // GlobalExceptionHandler's HttpMessageNotReadableException handler instead (a generic
+        // "Malformed request body." response, not a field-keyed validation message).
         DeviceType deviceType,
 
-        @Size(max = 255)
+        @Size(max = 255, message = "must be at most 255 characters")
         String location,
 
-        @NotNull
+        @NotNull(message = "must not be null")
         Long userId
 ) {
 }
