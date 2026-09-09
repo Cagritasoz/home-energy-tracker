@@ -5,6 +5,7 @@ import com.cagritasoz.ingestion_service.service.IngestionService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,12 @@ import java.util.Random;
 
 // TODO: Simulation with multiple threads might be implemented.
 @Component
+// matchIfMissing = true so existing behavior (simulator always runs) is unchanged for anyone who
+// hasn't set the property - set simulation.enabled=false to turn it off entirely. Applied at the
+// bean level, not inside sendMockData(), so when disabled this component (and its
+// deviceIdPool/@Scheduled machinery) is never even created rather than created-but-idle.
+// "Create this bean if simulation.enabled is true, OR if simulation.enabled hasn't been configured at all."
+@ConditionalOnProperty(prefix = "simulation", name = "enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
 public class ContinuousDataSimulator {
