@@ -15,7 +15,7 @@ public class IngestionController {
     private final IngestionService ingestionService;
 
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
+    @ResponseStatus(HttpStatus.ACCEPTED)
     public void ingest(@Valid @RequestBody EnergyUsageDto energyUsageDto) {
 
         ingestionService.ingestEnergyUsage(energyUsageDto);

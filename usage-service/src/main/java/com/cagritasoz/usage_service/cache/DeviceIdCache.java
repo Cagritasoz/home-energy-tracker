@@ -35,8 +35,11 @@ public class DeviceIdCache {
             knownDeviceIds = ids == null ? Set.of() : Set.copyOf(ids);
         } catch (RestClientException e) {
             // Keep serving the last good snapshot rather than wiping it to empty - a transient
-            // device-service blip shouldn't suddenly mark every device "unknown".
-            log.warn("Failed to refresh device id cache from device-service; keeping previous snapshot of {} ids", knownDeviceIds.size(), e);
+            // device-service blip shouldn't suddenly mark every device "unknown". Already
+            // handled, not a crash - so just e.getMessage(), not the full exception (passing e
+            // itself would print a full stack trace every refresh-interval device-service is
+            // down, which reads exactly like an uncaught crash even though it isn't one).
+            log.warn("Failed to refresh device id cache from device-service; keeping previous snapshot of {} ids ({})", knownDeviceIds.size(), e.getMessage());
         }
     }
 
