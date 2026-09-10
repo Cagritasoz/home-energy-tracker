@@ -6,14 +6,12 @@ import com.cagritasoz.user_service.exception.DuplicateEmailException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Objects;
 
 @Service
-@Slf4j
 @RequiredArgsConstructor
 public class UserService {
 
