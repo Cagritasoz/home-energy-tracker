@@ -25,7 +25,7 @@ public class User {
     @Column(name = "last_name", length = 100, nullable = false)
     private String lastName;
 
-    @Column(unique = true, nullable = false)
+    @Column(length = 255, unique = true, nullable = false)
     private String email;
 
     @Column(columnDefinition = "TEXT")
@@ -33,7 +33,7 @@ public class User {
 
     // Populated by Hibernate on INSERT, never on UPDATE (updatable = false) - mirrors the
     // DEFAULT now() in V2 so a row written outside the app still gets a value. TIMESTAMPTZ maps
-    // to Instant.
+    // to Instant. Audit columns never reaches the database as null as hibernate populates them even though we do not include them while building a User object.
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

@@ -1,12 +1,15 @@
 package com.cagritasoz.user_service.controller;
 
-import com.cagritasoz.user_service.dto.UserDto;
+import com.cagritasoz.user_service.dto.UserRequest;
+import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("api/v1/users")
@@ -16,28 +19,37 @@ public class UserController {
     private final UserService userService;
 
     @PostMapping
-    public ResponseEntity<UserDto> createUser(@Valid @RequestBody UserDto userDto) {
+    public ResponseEntity<UserResponse> createUser(@Valid @RequestBody UserRequest userRequest) {
 
-        UserDto createdUser = userService.createUser(userDto);
+        UserResponse createdUser = userService.createUser(userRequest);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(createdUser);
 
     }
 
-    @GetMapping("/{id}")
-    public ResponseEntity<UserDto> getUserById(@PathVariable Long id) {
+    @GetMapping
+    public ResponseEntity<List<UserResponse>> getUsers() {
 
-        UserDto foundUser = userService.getUserById(id);
+        List<UserResponse> foundUsers = userService.getUsers();
+
+        return ResponseEntity.ok(foundUsers);
+
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
+
+        UserResponse foundUser = userService.getUserById(id);
 
         return ResponseEntity.ok(foundUser);
 
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<UserDto> updateUser(@PathVariable Long id,
-                                              @Valid @RequestBody UserDto userDto) {
+    public ResponseEntity<UserResponse> updateUser(@PathVariable Long id,
+                                                    @Valid @RequestBody UserRequest userRequest) {
 
-        UserDto updatedUser = userService.updateUser(id, userDto);
+        UserResponse updatedUser = userService.updateUser(id, userRequest);
 
         return ResponseEntity.ok(updatedUser);
 

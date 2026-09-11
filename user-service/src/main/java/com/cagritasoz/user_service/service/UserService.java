@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.service;
 
-import com.cagritasoz.user_service.dto.UserDto;
+import com.cagritasoz.user_service.dto.UserRequest;
+import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.exception.DuplicateEmailException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
@@ -9,7 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Objects;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -18,95 +19,88 @@ public class UserService {
     private final UserRepository userRepository;
 
     @Transactional
-    public UserDto createUser(UserDto inputUser) {
+    public UserResponse createUser(UserRequest request) {
 
-        // Fast-path check: gives a clean, typed error in the common (non-racing) case
-        // instead of letting a DB round-trip fail. NOT sufficient on its own — see
-        // the DataIntegrityViolationException handler in GlobalExceptionHandler for why.
-        if (userRepository.existsByEmail(inputUser.email())) {
-            throw new DuplicateEmailException("Email already in use!");
+        // Fast-path check: gives a clean, typed error in the common (non-racing) case instead of
+        // letting a DB round-trip fail. NOT sufficient on its own - see the
+        // DataIntegrityViolationException handler in GlobalExceptionHandler for why.
+        if (userRepository.existsByEmail(request.email())) {
+            throw new DuplicateEmailException();
         }
 
         final User user = User.builder()
-                .firstName(inputUser.firstName())
-                .lastName(inputUser.lastName())
-                .email(inputUser.email())
-                .address(inputUser.address())
-                // DTO fields are optional (client may omit them) - Lombok's @Builder does NOT
-                // apply the entity's own field-initializer defaults (= false / = 0.0) unless
-                // @Builder.Default is used, so an explicit fallback is needed here or a null
-                // reaches the NOT NULL alerts_enabled/energy_alerting_threshold columns triggering a DataIntegrityViolationException which fires up "Email already in use".
-                // A complete nonsense of a response.
-                .alertsEnabled(Objects.requireNonNullElse(inputUser.alertsEnabled(), Boolean.FALSE))
-                .energyAlertingThreshold(Objects.requireNonNullElse(inputUser.energyAlertingThreshold(), 0.0))
+                .firstName(request.firstName())
+                .lastName(request.lastName())
+                .email(request.email())
+                .address(request.address())
                 .build();
 
-        final User saved = userRepository.save(user); // id populated.
+        // id/createdAt/updatedAt are populated by the DB/Hibernate on save, not before.
+        return toResponse(userRepository.save(user));
+    }
 
-        return toDto(saved);
+    // Unlike getAlertRules, there's no parent to scope by and no existsById check needed -
+    // users is the top-level resource. findAll() comes free from JpaRepository, no custom
+    // repository method required.
+    @Transactional(readOnly = true)
+    public List<UserResponse> getUsers() {
+        return userRepository.findAll()
+                .stream()
+                .map(this::toResponse)
+                .toList();
     }
 
     @Transactional(readOnly = true)
-    public UserDto getUserById(Long id) {
+    public UserResponse getUserById(Long id) {
 
-        User foundUser = userRepository.findById(id)
-                .orElseThrow(() -> new UserNotFoundException("User not found!"));
-        return toDto(foundUser);
+        User user = userRepository.findById(id)
+                .orElseThrow(UserNotFoundException::new);
+
+        return toResponse(user);
     }
 
     @Transactional
-    public UserDto updateUser(Long id, UserDto userDto) {
+    public UserResponse updateUser(Long id, UserRequest request) {
 
-    User foundUser = userRepository.findById(id)
-                .orElseThrow(() -> new UserNotFoundException("User not found!")); // Found user is managed
+        User user = userRepository.findById(id)
+                .orElseThrow(UserNotFoundException::new); // managed entity
 
-        // Only check when the email is actually changing - otherwise a user keeping
-        // their own email would always "collide" with themselves since existsByEmail() would always return true.
-        // A user changing their email could collide with existing emails, if email has changed pre-check is necessary.
-        boolean emailChanged = !foundUser.getEmail().equals(userDto.email());
-        if (emailChanged && userRepository.existsByEmail(userDto.email())) {
-            throw new DuplicateEmailException("Email already in use!");
+        // Only check when the email is actually changing - otherwise a user keeping their own
+        // email would always "collide" with themselves since existsByEmail() would always
+        // return true for it.
+        boolean emailChanged = !user.getEmail().equals(request.email());
+        if (emailChanged && userRepository.existsByEmail(request.email())) {
+            throw new DuplicateEmailException();
         }
 
-        foundUser.setFirstName(userDto.firstName());
-        foundUser.setLastName(userDto.lastName());
-        foundUser.setEmail(userDto.email());
-        foundUser.setAddress(userDto.address());
-        // Unlike createUser, a null here means "field omitted from the request", not "explicitly
-        // cleared" - there's no sentinel for that distinction, so the only safe reading is to
-        // leave the already-loaded value alone rather than defaulting it to false/0.0, which
-        // would silently disable alerts on any update that never meant to touch that field.
-        if (userDto.alertsEnabled() != null) {
-            foundUser.setAlertsEnabled(userDto.alertsEnabled());
-        }
-        if (userDto.energyAlertingThreshold() != null) {
-            foundUser.setEnergyAlertingThreshold(userDto.energyAlertingThreshold());
-        }
+        user.setFirstName(request.firstName());
+        user.setLastName(request.lastName());
+        user.setEmail(request.email());
+        user.setAddress(request.address());
 
-        // No explicit save needed: foundUser is managed, so Hibernate's dirty
-        // checking flushes these changes automatically at transaction commit.
-        // UPDATE keyword is used not INSERT.
-        return toDto(foundUser);
+        // Managed entity - dirty checking flushes these changes at commit (UPDATE, not INSERT),
+        // and @UpdateTimestamp bumps updated_at along with it. No save() call needed.
+        return toResponse(user);
     }
 
     @Transactional
     public void deleteUser(Long id) {
 
-        User foundUser = userRepository.findById(id)
-                        .orElseThrow(() -> new UserNotFoundException("User not found!"));
-        userRepository.delete(foundUser);
+        User user = userRepository.findById(id)
+                .orElseThrow(UserNotFoundException::new);
+
+        userRepository.delete(user);
     }
 
-    private UserDto toDto(User user) {
-        return UserDto.builder()
+    private UserResponse toResponse(User user) {
+        return UserResponse.builder()
                 .id(user.getId())
                 .firstName(user.getFirstName())
                 .lastName(user.getLastName())
                 .email(user.getEmail())
                 .address(user.getAddress())
-                .alertsEnabled(user.getAlertsEnabled())
-                .energyAlertingThreshold(user.getEnergyAlertingThreshold())
+                .createdAt(user.getCreatedAt())
+                .updatedAt(user.getUpdatedAt())
                 .build();
     }
 }
-
