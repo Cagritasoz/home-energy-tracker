@@ -20,19 +20,35 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
     }
 
+    @ExceptionHandler(AlertRuleNotFoundException.class)
+    public ProblemDetail handleAlertRuleNotFound(AlertRuleNotFoundException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
     @ExceptionHandler(DuplicateEmailException.class)
     public ProblemDetail handleDuplicateEmailException(DuplicateEmailException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }
 
-    // Safety net for the TOCTOU race: two concurrent requests can both pass the
-    // existsByEmail() check in UserService before either commits, so the unique
-    // constraint (not the pre-check, database level) is what actually guarantees no duplicates.
-    // Spring translates the underlying org.postgresql.util.PSQLException into this
-    // type via PersistenceExceptionTranslationPostProcessor - see UserService for detail.
+    @ExceptionHandler(DuplicateAlertRuleException.class)
+    public ProblemDetail handleDuplicateAlertRuleException(DuplicateAlertRuleException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    // Safety net for every TOCTOU race in this service, not just email: two concurrent requests
+    // can both pass a pre-check (existsByEmail, existsByUserIdAndEvaluationWindowAndScope)
+    // before either commits, so each unique constraint - not the pre-check - is what actually
+    // guarantees no duplicates; a deleted-user race on alert_rules' FK lands here too. Spring
+    // translates the underlying org.postgresql.util.PSQLException into this type via
+    // PersistenceExceptionTranslationPostProcessor. Deliberately generic rather than
+    // "Email already in use." (which this used to say) - that was wrong for the other two cases
+    // it now also has to cover, and telling them apart precisely would mean inspecting the
+    // triggered constraint's name (e.g. via the wrapped ConstraintViolationException), which
+    // isn't done here. The specific, correctly-worded errors (DuplicateEmailException,
+    // DuplicateAlertRuleException) already cover the common, non-racing path above.
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail handleDataIntegrityViolationException(DataIntegrityViolationException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Email already in use.");
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Request conflicts with existing data.");
     }
 
     // Handle bean validation exceptions
@@ -50,9 +66,8 @@ public class GlobalExceptionHandler {
     }
 
     // Thrown when the request body can't even be deserialized into the target DTO - malformed
-    // JSON, wrong types, or (see UserDto) a null/missing value for a primitive field. Runs
-    // before @Valid ever gets a chance to, so it needs its own handler separate from
-    // MethodArgumentNotValidException above.
+    // JSON or wrong types. Runs before @Valid ever gets a chance to, so it needs its own handler
+    // separate from MethodArgumentNotValidException above.
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ProblemDetail handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Malformed request body.");

@@ -2,6 +2,10 @@ package com.cagritasoz.user_service.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+
+import java.time.Instant;
 
 @Entity
 @Table(name = "users")
@@ -21,15 +25,21 @@ public class User {
     @Column(name = "last_name", length = 100, nullable = false)
     private String lastName;
 
-    @Column(unique = true, nullable = false)
+    @Column(length = 255, unique = true, nullable = false)
     private String email;
 
     @Column(columnDefinition = "TEXT")
     private String address;
 
-    @Column(name = "alerts_enabled", nullable = false)
-    private Boolean alertsEnabled = false; // Defaults to false.
+    // Populated by Hibernate on INSERT, never on UPDATE (updatable = false) - mirrors the
+    // DEFAULT now() in V2 so a row written outside the app still gets a value. TIMESTAMPTZ maps
+    // to Instant. Audit columns never reaches the database as null as hibernate populates them even though we do not include them while building a User object.
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
 
-    @Column(name = "energy_alerting_threshold", nullable = false)
-    private Double energyAlertingThreshold = 0.0; // Defaults to 0.0.
+    // Rewritten by Hibernate on every flush that dirties this entity.
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
 }
