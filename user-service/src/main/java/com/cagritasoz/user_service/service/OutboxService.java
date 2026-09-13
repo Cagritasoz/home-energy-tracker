@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.service;
 
+import com.cagritasoz.user_service.aspect.SkipLogging;
 import com.cagritasoz.user_service.entity.OutboxEvent;
 import com.cagritasoz.user_service.model.OutboxAggregateType;
 import com.cagritasoz.user_service.model.OutboxEventType;
@@ -53,6 +54,10 @@ public class OutboxService {
     // OutboxEventRepository at all - it only ever talks to this one façade for outbox_events.
     // Backed by V4's partial index (idx_outbox_events_pending); Pageable bounds the batch size so
     // a large backlog (e.g. after downtime) drains gradually across ticks instead of all at once.
+    // @SkipLogging: called every relay tick regardless of whether there's anything pending -
+    // unlike recordEvent above (one call per real user action), logging every invocation here
+    // would just be noise on a fixed timer, not a meaningful event.
+    @SkipLogging
     @Transactional(readOnly = true)
     public List<OutboxEvent> findPendingEvents(int batchSize) {
         return outboxEventRepository.findByPublishedAtIsNullOrderByIdAsc(PageRequest.of(0, batchSize));
@@ -67,6 +72,9 @@ public class OutboxService {
     // row's published_at was never actually persisted, so the same row kept being found as
     // "pending" and re-published every tick, forever. Calling this from OutboxRelay (a genuinely
     // different bean) makes it a real proxied call, so @Transactional actually applies.
+    // @SkipLogging: same reasoning as findPendingEvents - fires once per delivered row on every
+    // relay tick, not once per meaningful user-triggered action.
+    @SkipLogging
     @Transactional
     public void markPublished(Long id) {
         outboxEventRepository.findById(id)

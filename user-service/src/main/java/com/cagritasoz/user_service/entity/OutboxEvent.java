@@ -59,7 +59,7 @@ public class OutboxEvent {
     private OutboxEventType eventType;
 
     // The exact JSON sent to Kafka as the message body - opaque here, never parsed or built by
-    // this entity (the writer serializes the real event record via Jackson before this entity is
+    // this entity (the writer serializes the real event record via Jackson Object Mapper before this entity is
     // even constructed). @JdbcTypeCode(SqlTypes.JSON): Hibernate 6's native jsonb mapping for a
     // plain String, no extra dependency (e.g. hypersistence-utils) needed for something this
     // simple. Unverified against this exact Spring Boot/Hibernate pairing until the app actually

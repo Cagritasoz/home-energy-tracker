@@ -30,7 +30,7 @@ public class UsageService {
         // (eventually consistent with device-service, see DeviceIdCache), and dropping real
         // telemetry over a temporarily-stale cache would lose data for what's very likely a
         // perfectly valid device. deviceKnown=false can be reconciled later.
-        boolean deviceKnown = deviceIdCache.isKnown(event.deviceId());
+        boolean deviceKnown = deviceIdCache.isKnown(event.deviceId()); // Should this be dropped? Is it even relevant after auth check?
 
         log.info("{} is known: {}", event.deviceId(), deviceKnown);
 

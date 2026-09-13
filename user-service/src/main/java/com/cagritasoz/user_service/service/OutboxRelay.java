@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.service;
 
+import com.cagritasoz.user_service.aspect.SkipLogging;
 import com.cagritasoz.user_service.entity.OutboxEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +44,7 @@ public class OutboxRelay {
     private int batchSize;
 
     @Scheduled(fixedDelayString = "${app.outbox.relay.interval-ms}")
+    @SkipLogging
     public void relay() {
 
         List<OutboxEvent> pending = outboxService.findPendingEvents(batchSize);
@@ -103,7 +105,7 @@ public class OutboxRelay {
         // let a row that was never really delivered look exactly like one that was - the one
         // failure mode that would make this entire pattern pointless.
         try {
-            kafkaTemplate.send(record).get(); // Blocked for broker to ack.
+            kafkaTemplate.send(record).get(); // Blocked to ensure that broker acks.
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.error("Interrupted while sending outbox event {} (type {}) to Kafka - NOT delivered, will retry next cycle",
