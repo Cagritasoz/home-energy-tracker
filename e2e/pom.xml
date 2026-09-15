@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!-- Inherit from root pom -->
+	<parent>
+		<groupId>com.cagritasoz</groupId>
+		<artifactId>home-energy-tracker</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../pom.xml</relativePath>
+	</parent>
+
+	<artifactId>e2e</artifactId>
+	<packaging>jar</packaging>
+
+	<name>e2e</name>
+
+	<description>
+		Layer 4 cross-service tests (see CLAUDE.md's testing strategy) - Testcontainers
+		ComposeContainer against infra/docker-compose.yml, run with `-Pe2e`. Only in the reactor when
+		that profile is active, so a plain `./mvnw test` never touches this module.
+	</description>
+
+	<!--
+	    STUB MODULE - no test classes yet. Reserved for a handful of true cross-service journeys
+	    (e.g. create a user, create their device, delete the user, confirm the device is gone once
+	    device-service has a UserDeleted consumer), not exhaustive coverage - most tests belong in
+	    each service's own Layers 1-3. Build this last, once there's a second service to actually
+	    react to something (see CLAUDE.md Roadmap).
+	-->
+
+	<dependencies>
+
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+	</dependencies>
+
+</project>

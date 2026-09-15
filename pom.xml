@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<!--
+        Inherits Spring Boot's Maven configuration and dependency management.
+        The selected Spring Boot version determines the managed versions of
+        Spring Boot and its compatible third-party dependencies.
+        Child poms dependencies get their versions here. Single source of truth.
+        -->
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+
+	<groupId>com.cagritasoz</groupId> <!-- Child inherits groupId. -->
+	<artifactId>home-energy-tracker</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging> <!-- This project isn't itself a Spring Boot application/JAR. It's a POM project.
+	                                Meaning "I'm a POM that organizes other modules." Needed to declare it as root pom.
+	                           -->
+
+	<name>home-energy-tracker</name>
+	<description>Home energy tracking microservices - reactor/aggregator POM.</description>
+
+	<!-- Named variables for Maven configuration. -->
+	<properties>
+		<java.version>21</java.version>
+		<!-- Not consumed by any module yet - api-gateway and ai-insight-service are still on the
+		     roadmap. Imported now so the version is pinned in one place before the
+		     first module that needs it is built, instead of every future module guessing its own. -->
+		<spring-cloud.version>2025.1.2</spring-cloud.version>
+		<spring-ai.version>2.0.1</spring-ai.version>
+		<resilience4j.version>2.4.0</resilience4j.version>
+		<!-- Newer than the Testcontainers line spring-boot-dependencies pins by default;
+		     Testing strategy (@DataJpaTest + Testcontainers Postgres,
+		     @SpringBootTest + @EmbeddedKafka) are the first real consumers of this. -->
+		<testcontainers.version>2.0.5</testcontainers.version>
+	</properties>
+
+	<!-- "When I build the root project, these projects are part of my build." -->
+	<modules>
+		<module>contracts</module>
+		<module>services/user-service</module>
+		<module>services/device-service</module>
+		<module>services/ingestion-service</module>
+		<module>services/usage-service</module>
+	</modules>
+
+	<!--
+    A BOM (Bill of Materials) is a centralized version catalog for a group
+    of related dependencies. It defines which versions of those dependencies
+    are intended to work together.
+
+    Spring Boot's dependency management does not cover every library we use.
+    These additional BOMs provide version management for Spring Cloud,
+    Spring AI, Resilience4j, and Testcontainers.
+
+    Importing a BOM does not add those dependencies to the project.
+    Instead, it tells Maven which compatible versions to use whenever a
+    child module declares one of the dependencies.
+
+    Therefore, when a child module declares one of these dependencies without
+    specifying a version, Maven can use the version provided by the corresponding BOM.
+
+    This keeps dependency versions centralized and consistent across all child modules
+    and avoids repeating version numbers in each child POM.
+    -->
+	<dependencyManagement>
+		<dependencies>
+
+			<dependency>
+				<groupId>org.springframework.cloud</groupId>
+				<artifactId>spring-cloud-dependencies</artifactId>
+				<version>${spring-cloud.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
+			<dependency>
+				<groupId>io.github.resilience4j</groupId>
+				<artifactId>resilience4j-bom</artifactId>
+				<version>${resilience4j.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
+			<dependency>
+				<groupId>org.testcontainers</groupId>
+				<artifactId>testcontainers-bom</artifactId>
+				<version>${testcontainers.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<!-- "Here is the configuration that should be used when a child decides to use this plugin."
+		     It doesn't necessarily activate the plugin for every child and a child may have to explicitly
+		     configure their own plugins.
+		-->
+		<pluginManagement>
+			<plugins>
+				<!-- Every service pom had this identical block (lombok's annotation processor wired
+				     into both the compile and test-compile executions) copy-pasted four times for maven-compiler-plugin.
+				     Hoisted here; each service now just declares a bare <plugin> entry (groupId +
+				     artifactId, no config) to pull this in - see e.g. services/user-service/pom.xml. -->
+				<plugin>
+					 <!-- maven-compiler-plugin is needed for: .java -> Maven compiler -> .class -->
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-compiler-plugin</artifactId>
+					<executions>
+
+						<execution>
+							<id>default-compile</id>
+							<phase>compile</phase>
+							<goals>
+								<goal>compile</goal>
+							</goals>
+							<configuration>
+								<!-- Make Lombok available as an annotation processor during compilation. -->
+								<annotationProcessorPaths>
+									<path>
+										<groupId>org.projectlombok</groupId>
+										<artifactId>lombok</artifactId>
+									</path>
+								</annotationProcessorPaths>
+							</configuration>
+						</execution>
+
+						<execution>
+							<id>default-testCompile</id>
+							<phase>test-compile</phase>
+							<goals>
+								<goal>testCompile</goal>
+							</goals>
+							<configuration>
+								<annotationProcessorPaths>
+									<path>
+										<groupId>org.projectlombok</groupId>
+										<artifactId>lombok</artifactId>
+									</path>
+								</annotationProcessorPaths>
+							</configuration>
+						</execution>
+
+					</executions>
+				</plugin>
+			</plugins>
+		</pluginManagement>
+	</build>
+
+	<!-- A Maven profile is basically an optional configuration/build mode.
+	     For example "mvn verify" does not include e2e module because parent pom.xml (this file)
+	     does not define e2e as a module in modules. Running "mvn verify -Pe2e" includes e2e module
+	     along with defined modules.
+	-->
+	<profiles>
+
+		<profile>
+			<id>e2e</id>
+			<modules>
+				<module>e2e</module>
+			</modules>
+		</profile>
+
+	</profiles>
+
+</project>

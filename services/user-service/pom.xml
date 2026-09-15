@@ -2,15 +2,16 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
+
+	<!-- Because of <parent>, the user service inherits relevant configuration from the root specified by the relativePath -->
 	<parent>
-		<groupId>org.springframework.boot</groupId>
-		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.1.1</version>
-		<relativePath/> <!-- lookup parent from repository -->
+		<groupId>com.cagritasoz</groupId>
+		<artifactId>home-energy-tracker</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../../pom.xml</relativePath> <!-- "My parent Maven project is home-energy-tracker, and its POM is two directories above me." -->
 	</parent>
-	<groupId>com.cagritasoz</groupId>
+
 	<artifactId>user-service</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
 	<name/>
 	<description/>
 	<url/>
@@ -26,11 +27,15 @@
 		<tag/>
 		<url/>
 	</scm>
-	<properties>
-		<java.version>21</java.version>
-	</properties>
 
 	<dependencies>
+
+		<!--
+        No <version> is needed here because this child inherits dependency
+        management from the root POM, which ultimately inherits it from
+        spring-boot-starter-parent. The Spring Boot parent/BOM provides the
+        compatible version for this dependency automatically.
+        -->
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -71,30 +76,33 @@
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
-			<scope>runtime</scope>
+			<scope>runtime</scope> <!-- Means the application needs this dependency when running.-->
 		</dependency>
 
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
-			<optional>true</optional>
+			<optional>true</optional> <!-- If another project depends on user-service, don't automatically expose Lombok as a transitive dependency.-->
 		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>
-			<scope>test</scope>
+			<scope>test</scope> <!-- Means it's available for tests but isn't part of the production runtime dependency set.  -->
 		</dependency>
 
 	</dependencies>
 
 	<build>
 		<plugins>
+
 			<plugin>
+				<!-- This is what allows Maven to turn the application into an executable Spring Boot JAR. -->
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
 					<excludes>
+						<!-- Don't package Lombok into the final executable JAR. -->
 						<exclude>
 							<groupId>org.projectlombok</groupId>
 							<artifactId>lombok</artifactId>
@@ -102,42 +110,13 @@
 					</excludes>
 				</configuration>
 			</plugin>
+
+			<!-- lombok annotation-processor wiring inherited from the root pom's pluginManagement -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<executions>
-					<execution>
-						<id>default-compile</id>
-						<phase>compile</phase>
-						<goals>
-							<goal>compile</goal>
-						</goals>
-						<configuration>
-							<annotationProcessorPaths>
-								<path>
-									<groupId>org.projectlombok</groupId>
-									<artifactId>lombok</artifactId>
-								</path>
-							</annotationProcessorPaths>
-						</configuration>
-					</execution>
-					<execution>
-						<id>default-testCompile</id>
-						<phase>test-compile</phase>
-						<goals>
-							<goal>testCompile</goal>
-						</goals>
-						<configuration>
-							<annotationProcessorPaths>
-								<path>
-									<groupId>org.projectlombok</groupId>
-									<artifactId>lombok</artifactId>
-								</path>
-							</annotationProcessorPaths>
-						</configuration>
-					</execution>
-				</executions>
 			</plugin>
+
 		</plugins>
 	</build>
 
