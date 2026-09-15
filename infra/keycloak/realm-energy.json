@@ -1,0 +1,41 @@
+{
+  "realm": "energy-tracker",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+
+  "clients": [
+    {
+      "clientId": "local-dev",
+      "name": "Local dev / test-token client",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "local-dev-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
+      "webOrigins": ["+"]
+    }
+  ],
+
+  "users": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "username": "testuser",
+      "email": "testuser@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "testpassword",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

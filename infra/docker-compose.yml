@@ -189,6 +189,44 @@ services:
       timeout: 5s
       retries: 5
 
+  # Identity provider. user-service (and later every other service, once behind api-gateway)
+  # validates JWTs against this - it never issues its own tokens or owns credentials itself,
+  # that's entirely Keycloak's job. Runs in dev mode (start-dev): an unclustered, in-memory-by-
+  # default instance meant for exactly this - local development, not production.
+  #
+  # --import-realm + the mounted realm-energy.json pre-creates the "energy-tracker" realm, one
+  # client ("local-dev" - a stand-in for the future api-gateway client, used to mint test tokens
+  # via curl locally, see CLAUDE.md) and one test user ("testuser") on first boot, so there's
+  # nothing to click through in the admin console before user-service can be tested end-to-end.
+  # Re-running `docker compose up` after the volume already exists does NOT re-import (Keycloak
+  # only imports into an empty database) - if you edit realm-energy.json, `docker compose down -v`
+  # first to force a fresh import, same as the postgres/kafka volumes.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3
+    container_name: keycloak
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # Health endpoints are opt-in in recent Keycloak, off by default - needed for the healthcheck below.
+      KC_HEALTH_ENABLED: 'true'
+    ports:
+      # Host 8180, not 8080: 8080 is already user-service's port (see the service table in
+      # CLAUDE.md) - container-internal traffic still uses Keycloak's own default of 8080.
+      - "8180:8080"
+    volumes:
+      - ./keycloak/realm-energy.json:/opt/keycloak/data/import/realm-energy.json:ro
+    healthcheck:
+      # No curl/wget in the Keycloak image - open a raw TCP connection to the health endpoint via
+      # bash's /dev/tcp instead (the same trick as an actual HTTP client, just without one installed).
+      test: [ "CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '\"status\": \"UP\"' <&3" ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
 volumes:
   postgres_data:
   kafka_data:

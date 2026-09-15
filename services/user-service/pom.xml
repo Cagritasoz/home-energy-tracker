@@ -73,6 +73,16 @@
             <artifactId>spring-boot-starter-aspectj</artifactId>
         </dependency>
 
+		<!-- Resource-server side of OAuth2/OIDC only - validates JWTs against Keycloak's JWKS, never
+		     issues tokens or owns credentials itself. Boot 4.1.1 ships this artifact under two
+		     names; spring-boot-starter-oauth2-resource-server (no "security-") still resolves but
+		     its own pom says "deprecated in favor of spring-boot-starter-security-oauth2-resource-server" -
+		     use the current one. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
