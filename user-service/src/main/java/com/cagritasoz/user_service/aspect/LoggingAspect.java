@@ -13,8 +13,12 @@ import java.util.Arrays;
 @Slf4j
 public class LoggingAspect {
 
-    // All methods under service package.
-    @Pointcut("execution(* com.cagritasoz.user_service.service..*.*(..))")
+    // All methods under service package, except ones explicitly opted out via @SkipLogging -
+    // timer-driven methods (OutboxRelay.relay() and the OutboxService methods it calls every
+    // tick) where every invocation is noise rather than a meaningful event, unlike a
+    // request-driven method where each call already corresponds to something happening.
+    @Pointcut("execution(* com.cagritasoz.user_service.service..*.*(..)) " +
+            "&& !@annotation(com.cagritasoz.user_service.aspect.SkipLogging)")
     public void serviceMethods() {}
 
     @Before("serviceMethods()")
