@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Required XML/Maven boilerplate. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>com.cagritasoz</groupId>
+		<artifactId>home-energy-tracker</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../pom.xml</relativePath> <!-- The parent POM is one directory above me -->
+	</parent>
+
+	<!-- This identifies this particular Maven module as "contracts" -->
+	<artifactId>contracts</artifactId>
+
+	<packaging>jar</packaging> <!-- When Maven builds this module, the output should be a JAR -->
+
+	<name>contracts</name>
+
+	<description>
+		Shared event envelope, DTOs, topic constants and JSON examples for Kafka contracts.
+		Plain jar, no Spring dependency - producers/consumers depend on this instead of each other's packages.
+	</description>
+
+	<!--
+	    STUB MODULE - no source yet. This is a deliberate reversal of a decision documented in the
+	    root CLAUDE.md ("Kafka event contract (important)"): today, producer and consumer each define
+	    their own copy of the event record on purpose, so neither service depends on the other's
+	    packages, and the wire contract is enforced only through spring.json.type.mapping + the
+	    __TypeId__ header. Centralizing event/DTO classes here means every consumer of this jar now
+	    depends on it directly, which is exactly the coupling that design avoided. Wired into the
+	    reactor now so the module exists and builds (empty jar), but don't add classes here until
+	    that tradeoff has actually been decided - and CLAUDE.md's Kafka contract section gets rewritten
+	    in the same change once it is.
+	-->
+
+	<!-- No <build> section needed: spring-boot-maven-plugin is only in spring-boot-starter-parent's
+	     pluginManagement (config for IF it's bound), never in its actual <plugins> - and pluginManagement
+	     alone never activates a plugin. Nothing here declares it, and it isn't one of the handful of
+	     plugins (compiler, jar, surefire, ...) Maven's default lifecycle binds automatically for jar
+	     packaging, so it never runs against this module. Verified via `mvn help:effective-pom -pl
+	     contracts`: repackaging goal is absent from the effective build either way. -->
+
+</project>

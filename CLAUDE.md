@@ -6,7 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `home-energy-tracker` is a learning project: four independent Spring Boot microservices tracking home energy consumption, wired together by Kafka events, one shared PostgreSQL instance (schema per service), and InfluxDB for time-series readings. Java 21, Spring Boot 4.1.1, Jackson 3, JUnit 5, Lombok.
 
-There is **no parent/aggregator POM** — each service is a standalone Maven project with its own wrapper.
+**Maven reactor structure** (migrated from four standalone projects — see git history around 2026-09-15 for the restructure): one root `pom.xml` (packaging `pom`, parented on `spring-boot-starter-parent`) aggregates every module and holds the one Maven wrapper for the whole repo — services no longer have their own `mvnw`. Each service's `pom.xml` is parented on the root pom (`<relativePath>../../pom.xml</relativePath>`) and only lists dependencies, no versions. Layout:
+- `contracts/` — plain jar (no Spring), meant to hold a shared event envelope/DTOs/topic constants/JSON examples. **Currently an empty stub, wired into the reactor but with no classes.** Populating it means reversing the "producer and consumer each define their own copy" decision below in "Kafka event contract" — don't add classes here until that tradeoff is actually decided, and rewrite that section in the same change once it is.
+- `services/user-service`, `services/device-service`, `services/ingestion-service`, `services/usage-service` — the four services below, unchanged except for their POM's `<parent>`.
+- `infra/` — `docker-compose.yml`, `.env.example`, `.env` (gitignored, as before). **All docker-related services and their properties live here now, going forward** — postgres/keycloak/prometheus/grafana/tempo config, once any of those exist, join it here rather than at repo root.
+- `e2e/` — Layer 4 cross-service tests (Testcontainers `ComposeContainer` against `infra/docker-compose.yml`). **Stub: builds, zero test classes yet.** Only enters the reactor under the `-Pe2e` profile, so a plain `./mvnw test` never touches it.
+- Planned, not yet built: `services/alert-service`, `services/notification-service`, `services/ai-insight-service`, `services/api-gateway` (see Roadmap), `scripts/`.
+- Root `pom.xml` `<dependencyManagement>` pins BOMs for Spring Cloud, Spring AI, Resilience4j and Testcontainers — imported for the modules above that need them once they exist; nothing consumes Spring Cloud/Spring AI yet.
 
 **Design principle: model real IoT energy devices as accurately as reasonable**, not a convenient simplification. This has already driven one real design change — see "Reading model" in the Roadmap — and should keep informing future choices (e.g. device behavior, failure modes) over whatever is easiest to fake.
 
@@ -19,21 +25,24 @@ There is **no parent/aggregator POM** — each service is a standalone Maven pro
 
 ## Commands
 
-### Infrastructure (from repo root)
+### Infrastructure (from `infra/`)
 ```bash
+cd infra
 cp .env.example .env          # then fill in real values
 docker compose up -d          # postgres, kafka (KRaft), kafka-ui (:8070), influxdb
 docker exec -it influxdb influxdb3 create token --admin   # one-time; export result as INFLUXDB3_AUTH_TOKEN
 ```
+Or from repo root: `docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`.
 Each service's Flyway creates its own schema (`user_service`, `device_service`) on first run because `spring.flyway.schemas` is set; Flyway owns all DDL after that.
 
-### Per service (from the service directory, e.g. `user-service/`)
+### Build (one wrapper, at repo root — services no longer have their own)
 ```bash
-./mvnw spring-boot:run                          # run (use .\mvnw.cmd in PowerShell)
-./mvnw clean package                            # build + test
-./mvnw test                                     # all tests
-./mvnw test -Dtest='UserServiceApplicationTests#contextLoads'   # single test
+./mvnw clean package                                              # build + test every module (use .\mvnw.cmd in PowerShell)
+./mvnw test                                                       # all tests, every module
+./mvnw -pl services/user-service -am spring-boot:run              # run one service (-am also builds its reactor dependencies, e.g. contracts once used)
+./mvnw -pl services/user-service -am test -Dtest='UserServiceApplicationTests#contextLoads'   # single test
 ```
+`-pl services/<name>` targets one module from the root; equivalently `cd services/<name>` and run `../../mvnw ...` from there. `-Pe2e` activates the `e2e/` Testcontainers-ComposeContainer suite (stub module — no tests yet).
 
 - **`.env` is only read by docker compose.** Running a service via `mvnw` needs `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (and for usage-service `INFLUXDB3_AUTH_TOKEN`) exported into the shell — `application.properties` resolves them as `${...}`.
 - **usage-service** requires `--add-opens=java.base/java.nio=ALL-UNNAMED` (InfluxDB 3 client's Arrow Flight SQL path). `spring-boot:run` injects it automatically; a packaged jar needs it passed to `java` directly.
@@ -109,7 +118,7 @@ Manual testing (see user-service status above) proves the design works once, for
 
 **Build order given 0% today:** start with user-service (it just reached a stable point) — Layers 1–2 first, then Layer 3 for the outbox/relay. Build device-service's upcoming `UserDeleted` consumer *with* tests from day one rather than retrofitting them later. Backfill the other services opportunistically, prioritizing whatever has already stopped changing (don't sink effort into deeply testing `EnergyUsageEvent.consumedEnergy` right before the cumulative-counter rename lands). Add the Layer 4 suite last, once there's a second service to actually react to something.
 
-**CI (GitHub Actions, not built yet):** a matrix job per service (`user-service`/`device-service`/`ingestion-service`/`usage-service`, matching the no-parent-POM structure) running `./mvnw test` — GitHub-hosted runners have Docker preinstalled, so Testcontainers-backed tests need no extra CI setup. A separate, less-frequent job (e.g. only on `main`) runs `docker compose up -d` for the Layer 4 suite — `/actuator/health` (not yet added, see gaps) would make "wait until services are ready" reliable there instead of ad hoc port polling.
+**CI (GitHub Actions, not built yet):** a matrix job per service (`user-service`/`device-service`/`ingestion-service`/`usage-service`, matching the no-parent-POM structure) running `./mvnw test` — GitHub-hosted runners have Docker preinstalled, so Testcontainers-backed tests need no extra CI setup. A separate, less-frequent job (e.g. only on `main`) runs `docker compose -f infra/docker-compose.yml up -d` for the Layer 4 suite — `/actuator/health` (not yet added, see gaps) would make "wait until services are ready" reliable there instead of ad hoc port polling.
 
 ## Roadmap (planned / in progress — keep this current)
 
