@@ -15,7 +15,7 @@ import java.time.Instant;
 import java.util.List;
 
 // Writes rows to outbox_events - nothing more. Never touches Kafka; that's the relay's job.
-// Intended to be called from inside UserService/AlertRuleService's own @Transactional methods - never call
+// Intended to be called from inside UserService's own @Transactional methods - never call
 // kafkaTemplate.send() directly instead of going through this, see V4's header comment for the
 // dual-write problem that would reintroduce.
 @Service
@@ -27,8 +27,8 @@ public class OutboxService {
 
     // @Transactional here joins whatever transaction the caller already has open (Spring's
     // default REQUIRED propagation) rather than starting a separate one - it does not commit
-    // independently. That's what makes the outbox insert and the users/alert_rules change it
-    // announces atomic: both commit together, or neither does. Only correct when called from
+    // independently. That's what makes the outbox insert and the users change it announces
+    // atomic: both commit together, or neither does. Only correct when called from
     // inside an already-@Transactional method - it would still "work" standalone (REQUIRED starts
     // a new transaction if none exists), just without the atomicity guarantee that's the entire
     // point of this class.

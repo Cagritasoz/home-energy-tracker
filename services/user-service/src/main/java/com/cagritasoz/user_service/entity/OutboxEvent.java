@@ -14,8 +14,8 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 
 // Mirrors V4's outbox_events table exactly. One row = one domain event awaiting (or having
-// completed) publish to Kafka, written in the SAME transaction as the users/alert_rules change
-// it announces - see V4's header comment for why that matters.
+// completed) publish to Kafka, written in the SAME transaction as the users change it announces -
+// see V4's header comment for why that matters.
 @Entity
 @Table(name = "outbox_events")
 @Data
@@ -32,25 +32,20 @@ public class OutboxEvent {
     @Enumerated(EnumType.STRING)
     private OutboxAggregateType aggregateType;
 
-    // Plain scalar, deliberately NOT a @ManyToOne to User or AlertRule - it can point at either
-    // depending on aggregateType, and a USER_DELETED row's referenced user is expected to no
-    // longer exist by the time this row is read.
-    // A live FK/association here would be actively wrong, not just unneeded.
+    // Plain scalar, deliberately NOT a @ManyToOne to User - a USER_DELETED row's referenced user
+    // is expected to no longer exist by the time this row is read, so a live FK/association here
+    // would be actively wrong, not just unneeded.
     @Column(name = "aggregate_id", nullable = false)
     private Long aggregateId;
 
-    // The Kafka message key the relay will send this row with - always the owning user's id,
-    // even for ALERT_RULE_* rows (not that rule's own aggregateId). AlertRule cascade-deletes
-    // with its user via a DB-level FK invisible to the outbox writer, so a consumer caching
-    // alert-rule state has no event other than UserDeleted to learn "this user's rules are gone
-    // too" - it depends on that event and the user's earlier AlertRule* events staying strictly
-    // ordered. Kafka only guarantees order within a partition, and partition assignment is
-    // determined by this key - keying every one of a user's events (their own and their rules')
-    // to the SAME value keeps them on the same partition at any partition count, not just today's
-    // single partition. Deliberately a separate field from aggregateId: aggregateId identifies
-    // which specific row this event is about (needed for traceability - "show me every event for
-    // alert rule 47"), partitionKey identifies which ordering group it belongs to - conflating
-    // the two would lose the former.
+    // The Kafka message key the relay will send this row with - the owning user's id. Kafka only
+    // guarantees order within a partition, and partition assignment is determined by this key, so
+    // this is what keeps one user's events strictly ordered relative to each other at ANY
+    // partition count, not just today's single partition. Deliberately a separate field from
+    // aggregateId even though the two are always equal today (USER is currently the only
+    // aggregate type - see OutboxAggregateType): aggregateId identifies which specific row this
+    // event is about, partitionKey identifies which ordering group it belongs to - conflating the
+    // two would lose the former the moment this service owns a second aggregate type again.
     @Column(name = "partition_key", nullable = false)
     private Long partitionKey;
 
