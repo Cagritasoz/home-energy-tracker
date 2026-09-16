@@ -1,179 +1,59 @@
+# Compose project name
+name: home-energy-tracker
+
 services:
 
-  postgres:
+  # user-service's own Postgres instance. NOT shared, in name or intent - device-service/
+  # ingestion-service/usage-service still point their POSTGRES_DB/USER/PASSWORD-shaped local env
+  # at this same physical instance for now (see CLAUDE.md), because they haven't been rebuilt with
+  # their own DB yet; that's temporary and known, not this rename's problem to fix. When each of
+  # those services gets rebuilt, it gets its own instance the same way this one and keycloak-db did.
+  user-db:
     image: postgres:16-alpine
-    container_name: postgres
+    container_name: user-db
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${USER_DB_NAME}
+      POSTGRES_USER: ${USER_DB_USER}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD}
     volumes:
-
       # Runs once on first init (empty volume only). Creates the app database.
       # Skipped on all subsequent startups — Flyway owns schema from here.
       # - ./docker/postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql is redundant commenting it out.
-      - postgres_data:/var/lib/postgresql/data
+      - user_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${USER_DB_USER} -d ${USER_DB_NAME}" ] # Asks Postgres if it's ready to accept connections
+      interval: 10s    # Run the check every 10 seconds
+      timeout: 5s      # If no response within 5 seconds, count it as failed
+      retries: 5       # # Mark the container as unhealthy after 5 consecutive failures
+
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: keycloak-db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ${KEYCLOAK_DB_NAME}
+      POSTGRES_USER: ${KEYCLOAK_DB_USER}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${KEYCLOAK_DB_USER} -d ${KEYCLOAK_DB_NAME}" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  kafka-broker-controller-1:
-    image: apache/kafka:latest
-    container_name: kafka-broker-controller-1
-    ports: # Expose container ports to host with host ports.
-      - "9092:9092" # Unnecessary since port 9092 is declared as INTERNAL LISTENER under KAFKA_LISTENER, meaning internal container communication should hit port 9092, nothing external needs to reach it.
-      - "9094:9094" # Port 9094 is declared as EXTERNAL LISTENER under KAFKA_LISTENERS, localhost://9094 is how to reach this node.
-    environment:
-      # --- KRaft cluster identity/quorum (replaces ZooKeeper entirely) ---
-
-      # This node's id within the KRaft cluster. Every node (broker, controller, or both)
-      # needs a unique one - the KRaft-era generalization of the old KAFKA_BROKER_ID.
-      KAFKA_NODE_ID: 1
-
-      # Without this, Kafka falls back to its own internal default (/tmp/kafka-logs) instead of
-      # the kafka_data volume below - meaning topics/messages/KRaft metadata all land in the
-      # container's ephemeral filesystem and vanish on `docker compose down`, while the actual
-      # mounted volume stays empty the whole time. This makes the volume mount actually matter.
-      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
-
-      # Identifies the cluster as a whole, stamped into the storage directory on first boot.
-      # ZooKeeper-based Kafka never needed this in broker config since ZK itself was the
-      # shared source of cluster identity; without ZK, every node has to be told the same
-      # id explicitly, or they won't recognize each other as one cluster.
-      KAFKA_CLUSTER_ID: 'energy-tracker-cluster-1'
-
-      # Which role(s) this node plays in KRaft: 'broker' serves client produce/consume
-      # traffic, 'controller' participates in the metadata Raft quorum. Combining both on
-      # one node (as here) is the simple single-node dev pattern; production clusters
-      # usually run dedicated controller-only nodes separate from broker-only nodes.
-      KAFKA_PROCESS_ROLES: 'broker,controller'
-
-      # The KRaft replacement for KAFKA_ZOOKEEPER_CONNECT: lists every controller-eligible
-      # node (nodeId@host:port, comma-separated if more than one) so nodes know who
-      # participates in the Raft quorum that elects the active controller and replicates
-      # cluster metadata - Kafka's own quorum instead of an external ZooKeeper ensemble.
-      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-broker-controller-1:9093'
-
-      # Names which of the listeners below (CONTROLLER) carries controller-to-controller
-      # Raft traffic, as opposed to listeners serving regular client traffic. Under
-      # ZooKeeper this distinction didn't exist as a Kafka listener at all - that internal
-      # coordination traffic went over ZK's own separate protocol/port instead.
-      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
-
-      # --- Listener/networking config (unrelated to ZooKeeper vs KRaft - both setups need this) ---
-
-      # The actual addresses/ports Kafka binds to inside the container, one per named
-      # listener: INTERNAL for traffic from other containers on the Docker network (9092),
-      # EXTERNAL for traffic from the host machine (9094, matches the port mapping above),
-      # CONTROLLER for Raft quorum traffic (9093). 0.0.0.0 means "accept connections on
-      # any network interface", needed since both container-to-container and published-port
-      # traffic have to reach this same process. Named INTERNAL rather than PLAINTEXT so the
-      # listener alias never gets confused with PLAINTEXT the security protocol value below.
-      KAFKA_LISTENERS: >
-        INTERNAL://0.0.0.0:9092,
-        EXTERNAL://0.0.0.0:9094,
-        CONTROLLER://0.0.0.0:9093
-
-      # Different from KAFKA_LISTENERS above: this is what address Kafka tells CLIENTS to
-      # use once connected, not what it binds to. A container on the Docker network (your
-      # services) gets told to use this service's own Docker network name; a client on the
-      # host machine (outside Docker, e.g. a local script) gets told 'localhost:9094'
-      # instead, since that service name isn't resolvable there. No CONTROLLER entry here
-      # because clients never connect to the controller listener directly - only other nodes do.
-      KAFKA_ADVERTISED_LISTENERS: >
-        INTERNAL://kafka-broker-controller-1:9092,
-        EXTERNAL://localhost:9094
-
-      # Maps each named listener to the wire security protocol it actually speaks
-      # (PLAINTEXT = no encryption/auth here, vs SSL/SASL_* in production). All three are
-      # PLAINTEXT since this is local dev with no transport security configured.
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: >
-        CONTROLLER:PLAINTEXT,
-        INTERNAL:PLAINTEXT,
-        EXTERNAL:PLAINTEXT
-
-      # Which listener brokers use to replicate partition data between each other (distinct
-      # from the CONTROLLER listener used for metadata/Raft). Pointed at the same INTERNAL
-      # listener client traffic uses, since this is a single-broker setup with nothing else
-      # to replicate to yet.
-      KAFKA_INTER_BROKER_LISTENER_NAME: 'INTERNAL'
-
-      # --- Topic/replication defaults (also unrelated to ZooKeeper vs KRaft) ---
-
-      # Replication factor for Kafka's internal __consumer_offsets topic (where consumer
-      # group offsets are stored). 1 because there's only one broker to replicate to; a
-      # real cluster would want 3 for durability.
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-
-      # Same idea for the internal transaction-state topic backing Kafka's transactional/
-      # exactly-once producer support - 1 for the same single-broker reason.
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-
-      # Minimum in-sync replicas required before a write to the transaction log succeeds -
-      # matches the replication factor of 1 above, since there's nothing to require more of.
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-
-      # How long the group coordinator waits before the first consumer-group rebalance
-      # after a consumer joins. Normally a few seconds by default, to batch multiple
-      # consumers starting up at once into a single rebalance; 0 here purely so local dev
-      # consumers become active immediately instead of waiting.
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-
-      # Off on purpose: topics are declared explicitly as NewTopic beans in the services
-      # that own them instead, so each topic gets its own intended partition count/
-      # replication factor/retention rather than these cluster-wide defaults, and a typo
-      # in a topic name fails loudly instead of silently creating a garbage topic.
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
-
-      # Default partition count for auto-created topics. 1 is fine for single-broker local
-      # dev - more partitions only start mattering once you want parallelism across
-      # multiple consumers or brokers.
-      KAFKA_NUM_PARTITIONS: 1
-    volumes:
-      # Named volume, same as postgres_data - Docker manages the storage location itself
-      # rather than a project-local folder like ./docker/kafka_data.
-      - kafka_data:/var/lib/kafka/data
-
-  kafka-ui:
-    image: ghcr.io/kafbat/kafka-ui:latest
-    container_name: kafka-ui
-    ports:
-      - "8070:8080"
-    depends_on:
-      - kafka-broker-controller-1
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      # Containers on this compose file's default network reach each other by service name,
-      # not localhost - "localhost" inside kafka-ui's own container means kafka-ui itself, not
-      # the host machine or any sibling container, so this has to be the broker's service name.
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-broker-controller-1:9092
-      DYNAMIC_CONFIG_ENABLED: 'true'
-    restart: unless-stopped
-
-  # InfluxDB 3 Core - time-series DB usage-service will write energy readings to.
-  #
-  # Auth works differently here than Postgres/2.x: no username+password, no init env vars,
-  # no login UI - every HTTP request instead carries a Bearer token. Nothing to preconfigure
-  # ahead of time; once the container is up, create the one admin token you'll need with:
-  #   docker exec -it influxdb influxdb3 create token --admin
-  # It's printed once and never again, so save it - that's the only "credential" this service has.
-  #
-  # No bucket-creation step either: 3.x calls it a "database" instead of a "bucket", and it's
-  # auto-created on first authenticated write, no explicit create step required - the opposite
-  # default from Kafka above, where KAFKA_AUTO_CREATE_TOPICS_ENABLE is deliberately off.
   influxdb:
     image: influxdb:3-core
     container_name: influxdb
     ports:
-      - "8181:8181"                              # HTTP API - query/write/admin, all on one port
+      - "8181:8181"                               # HTTP API - query/write/admin, all on one port
     command:
       - influxdb3
       - serve
-      - --node-id=node0                          # id of this server instance (multi-node clusters only - unrelated to where data lives)
+      - --node-id=node0                           # id of this server instance (multi-node clusters only - unrelated to where data lives)
       - --object-store=file                       # local disk, same as postgres/kafka elsewhere in this file
       - --data-dir=/var/lib/influxdb3/data
     volumes:
@@ -189,45 +69,152 @@ services:
       timeout: 5s
       retries: 5
 
-  # Identity provider. user-service (and later every other service, once behind api-gateway)
-  # validates JWTs against this - it never issues its own tokens or owns credentials itself,
-  # that's entirely Keycloak's job. Runs in dev mode (start-dev): an unclustered, in-memory-by-
-  # default instance meant for exactly this - local development, not production.
-  #
-  # --import-realm + the mounted realm-energy.json pre-creates the "energy-tracker" realm, one
-  # client ("local-dev" - a stand-in for the future api-gateway client, used to mint test tokens
-  # via curl locally, see CLAUDE.md) and one test user ("testuser") on first boot, so there's
-  # nothing to click through in the admin console before user-service can be tested end-to-end.
-  # Re-running `docker compose up` after the volume already exists does NOT re-import (Keycloak
-  # only imports into an empty database) - if you edit realm-energy.json, `docker compose down -v`
-  # first to force a fresh import, same as the postgres/kafka volumes.
+  kafka-broker-controller-1:
+    image: apache/kafka:latest
+    container_name: kafka-broker-controller-1
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+      KAFKA_CLUSTER_ID: 'energy-tracker-cluster-1'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-broker-controller-1:9093'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'INTERNAL'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+
+      KAFKA_LISTENERS: >
+        INTERNAL://0.0.0.0:9092,
+        EXTERNAL://0.0.0.0:9094,
+        CONTROLLER://0.0.0.0:9093
+
+      KAFKA_ADVERTISED_LISTENERS: >
+        INTERNAL://kafka-broker-controller-1:9092,
+        EXTERNAL://localhost:9094
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: >
+        INTERNAL:PLAINTEXT,
+        EXTERNAL:PLAINTEXT,
+        CONTROLLER:PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_NUM_PARTITIONS: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      # Queries the INTERNAL listener (localhost:9092 from inside this container) for its
+      # supported API versions - confirms the broker is actually accepting client protocol
+      # connections, not just that the TCP port is open. start_period 30s: KRaft's own metadata
+      # quorum + log dir init can take a while on a fresh container, longer than the usual
+      # Postgres/InfluxDB startup this file's other healthchecks are tuned for.
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8070:8070"
+    depends_on:
+      kafka-broker-controller-1:
+        condition: service_healthy # Wait for the broker to actually accept connections, not just start.
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      # Containers on this compose file's default network reach each other by service name,
+      # not localhost - "localhost" inside kafka-ui's own container means kafka-ui itself, not
+      # the host machine or any sibling container, so this has to be the broker's service name.
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-broker-controller-1:9092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    restart: unless-stopped
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.3
     container_name: keycloak
+    ports:
+      - "8180:8180" # Main HTTP. Same number both sides — see KC_HTTP_PORT.
+      - "9000:9000" # Management. Convenient in dev; NEVER exposed publicly.
+    depends_on:
+      keycloak-db:
+        condition: service_healthy # Wait for the DB to accept connections.
     command:
+      # DEV ONLY. Permits HTTP, relaxes hostname checks, local cache,
+      # rebuilds config each boot. Production: `start --optimized`.
       - start-dev
+      # Imports any realm JSON in /opt/keycloak/data/import at startup.
+      # CRITICAL: only creates realms that DON'T EXIST. After editing the
+      # realm file `docker compose down -v` to see the effect, not `restart`.
       - --import-realm
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-      # Health endpoints are opt-in in recent Keycloak, off by default - needed for the healthcheck below.
+      # ── Bootstrap admin (master realm) ──
+      # KC_BOOTSTRAP_* replaces the deprecated KEYCLOAK_ADMIN* names as of KC 26.
+      # Creates the first admin on an EMPTY database only. Production: use once,
+      # create a real admin, then remove these.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/${KEYCLOAK_DB_NAME}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+
+      # ── Networking / issuer identity ──
+      KC_HTTP_ENABLED: "true"    # DEV ONLY — plain HTTP. Production: HTTPS only.
+
+      # Listen on 8180 INSIDE the container too, so one hostname:port works
+      # identically from the host and from other containers.
+      KC_HTTP_PORT: "8180"
+
+      # Pins the advertised base URL: the `iss` claim in every token and the
+      # `issuer` in the discovery document. Without this, Keycloak infers it
+      # from the Host header, and issuer mismatches could happen (401s) depending on
+      # which address the caller used.
+      #
+      # REQUIRED on host machine — add to /etc/hosts:
+      #     127.0.0.1   keycloak
+      # Then http://keycloak:8180 works from browser, Postman, IDE and containers.
+      #
+      # Production: KC_HOSTNAME: https://auth.example.com
+      KC_HOSTNAME: http://keycloak:8180
+
+      # ── Observability ──
+      # Exposes /health, /health/ready, /health/live on the MANAGEMENT port
+      # (9000) — NOT the main HTTP port. This moved in Keycloak 25.
       KC_HEALTH_ENABLED: 'true'
-    ports:
-      # Host 8180, not 8080: 8080 is already user-service's port (see the service table in
-      # CLAUDE.md) - container-internal traffic still uses Keycloak's own default of 8080.
-      - "8180:8080"
+      KC_METRICS_ENABLED: "true"   # Prometheus endpoint on 9000.
+      KC_LOG_LEVEL: info           # `debug` is preferred when diagnosing token problems.
     volumes:
+      # host-path:container-path:mode - :ro mounts it read-only, container can't modify your file.
       - ./keycloak/realm-energy.json:/opt/keycloak/data/import/realm-energy.json:ro
     healthcheck:
       # No curl/wget in the Keycloak image - open a raw TCP connection to the health endpoint via
       # bash's /dev/tcp instead (the same trick as an actual HTTP client, just without one installed).
-      test: [ "CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '\"status\": \"UP\"' <&3" ]
+      # Port 9000, not 8180: health endpoints live on the separate MANAGEMENT port (KC_HEALTH_ENABLED
+      # above), never the main HTTP port - this was still checking the old pre-KC_HTTP_PORT default.
+      test: [ "CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '\"status\": \"UP\"' <&3" ]
       interval: 10s
       timeout: 5s
       retries: 15
-      start_period: 30s
+      start_period: 60s
 
 volumes:
-  postgres_data:
+  # Without name: a volume defaults to <project>_<key> (project = top-level name: above).
+  # With name: it's pinned to that exact string instead, regardless of the project name.
+  # Volumes are explicitly named so they are not effected by project name changes.
+  keycloak_db_data:
+    name: home-energy-tracker_keycloak_db_data
+  # Docker has no "rename a volume" operation; if a volume name is to be changed volume has to be removed.
+  user_db_data:
+    name: home-energy-tracker_user_db_data
   kafka_data:
+    name: home-energy-tracker_kafka_data
   influxdb_data:
+    name: home-energy-tracker_influxdb_data
+
