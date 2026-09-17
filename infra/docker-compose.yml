@@ -5,17 +5,19 @@ services:
 
   # user-service's own Postgres instance. NOT shared, in name or intent - device-service/
   # ingestion-service/usage-service still point their POSTGRES_DB/USER/PASSWORD-shaped local env
-  # at this same physical instance for now (see CLAUDE.md), because they haven't been rebuilt with
-  # their own DB yet; that's temporary and known, not this rename's problem to fix. When each of
-  # those services gets rebuilt, it gets its own instance the same way this one and keycloak-db did.
+  # at this same physical instance for now, because they haven't been rebuilt with their own DB
+  # yet; that's temporary and known, not this rename's problem to fix. When each of those services
+  # gets rebuilt, it gets its own instance the same way this one and keycloak-db did.
   user-db:
     image: postgres:16-alpine
     container_name: user-db
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: ${USER_DB_NAME}
-      POSTGRES_USER: ${USER_DB_USER}
+      # Only the password is a secret - the db name and username are structural config, not
+      # credentials, so they're hardcoded here rather than routed through .env like POSTGRES_PASSWORD.
+      POSTGRES_DB: user_service
+      POSTGRES_USER: user_service
       POSTGRES_PASSWORD: ${USER_DB_PASSWORD}
     volumes:
       # Runs once on first init (empty volume only). Creates the app database.
@@ -23,7 +25,7 @@ services:
       # - ./docker/postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql is redundant commenting it out.
       - user_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${USER_DB_USER} -d ${USER_DB_NAME}" ] # Asks Postgres if it's ready to accept connections
+      test: [ "CMD-SHELL", "pg_isready -U user_service -d user_service" ] # Asks Postgres if it's ready to accept connections
       interval: 10s    # Run the check every 10 seconds
       timeout: 5s      # If no response within 5 seconds, count it as failed
       retries: 5       # # Mark the container as unhealthy after 5 consecutive failures
@@ -34,13 +36,14 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: ${KEYCLOAK_DB_NAME}
-      POSTGRES_USER: ${KEYCLOAK_DB_USER}
+      # Only the password is a secret - see the same note on user-db above.
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
       POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
     volumes:
       - keycloak_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${KEYCLOAK_DB_USER} -d ${KEYCLOAK_DB_NAME}" ]
+      test: [ "CMD-SHELL", "pg_isready -U keycloak -d keycloak" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -116,7 +119,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 30s # For the first 30 seconds after container starts, don't treat failed healthchecks as evidence that the container is unhealthy.
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:latest
@@ -157,12 +160,15 @@ services:
       # KC_BOOTSTRAP_* replaces the deprecated KEYCLOAK_ADMIN* names as of KC 26.
       # Creates the first admin on an EMPTY database only. Production: use once,
       # create a real admin, then remove these.
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      # Only the password is a secret - admin username is no more sensitive than any other username.
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
 
+      # keycloak-db's own db name/username, hardcoded here to match keycloak-db's hardcoded values
+      # above - only its password stays env-sourced, same role on both ends of this connection.
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/${KEYCLOAK_DB_NAME}
-      KC_DB_USERNAME: ${KEYCLOAK_DB_USER}
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
 
       # ── Networking / issuer identity ──

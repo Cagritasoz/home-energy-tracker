@@ -20,7 +20,7 @@ DROP TABLE alert_rules;
 DROP TABLE users;
 
 CREATE TABLE users (
-    id                    uuid        PRIMARY KEY,
+    id                    uuid        CONSTRAINT pk_users PRIMARY KEY,
     email                 text        NOT NULL,
     display_name          text        NOT NULL,
     timezone              text        NOT NULL DEFAULT 'UTC',
@@ -32,17 +32,17 @@ CREATE TABLE users (
     created_at            timestamptz NOT NULL DEFAULT now(),
     updated_at            timestamptz NOT NULL DEFAULT now(),
 
-    CONSTRAINT users_status_chk CHECK (status IN ('ACTIVE','DELETING','DELETED')),
+    CONSTRAINT chk_users_status CHECK (status IN ('ACTIVE','DELETING','DELETED')),
 
     -- Deliberately cheap, not real email validation (that's Bean Validation's job at the API
     -- boundary) - just a last-resort guard against an obviously-malformed email value reaching the DB
     -- some other way (a direct insert, a future backfill script, ...).
-    CONSTRAINT users_email_chk  CHECK (position('@' in email) > 1),
+    CONSTRAINT chk_users_email CHECK (position('@' in email) > 1),
 
     -- Makes "status says DELETED but deleted_at is still null" (or the reverse) impossible at the
     -- DB level. The finalizer and anything downstream can rely on status = 'DELETED' implying
     -- deleted_at is populated, with no defensive null-check needed.
-    CONSTRAINT users_deleted_consistency_chk
+    CONSTRAINT chk_users_deleted_consistency
         CHECK ((status = 'DELETED') = (deleted_at IS NOT NULL))
 );
 
@@ -53,12 +53,12 @@ CREATE TABLE users (
 -- This index provides conditional uniqueness: lowercased email must be unique
 -- among all rows whose status is not DELETED, while also providing an index
 -- on lower(email).
-CREATE UNIQUE INDEX users_email_uq ON users (lower(email)) WHERE status <> 'DELETED';
+CREATE UNIQUE INDEX uq_users_email ON users (lower(email)) WHERE status <> 'DELETED';
 
 -- Serves exactly the finalizer's scan ("DELETING rows whose grace period has elapsed") without a
 -- full table scan. Partial on status = 'DELETING' keeps the index small forever - the ACTIVE and
 -- DELETED rows that make up the overwhelming majority over time are excluded entirely.
-CREATE INDEX users_deleting_idx ON users (deletion_requested_at) WHERE status = 'DELETING';
+CREATE INDEX idx_users_deleting ON users (deletion_requested_at) WHERE status = 'DELETING';
 
 -- outbox            : Will be reintroduced in a later migration.
 -- processed_events  : Will be reintroduced in a later migration.

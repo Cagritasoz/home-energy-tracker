@@ -17,9 +17,9 @@
 	<name>e2e</name>
 
 	<description>
-		Layer 4 cross-service tests (see CLAUDE.md's testing strategy) - Testcontainers
-		ComposeContainer against infra/docker-compose.yml, run with `-Pe2e`. Only in the reactor when
-		that profile is active, so a plain `./mvnw test` never touches this module.
+		Layer 4 cross-service tests - Testcontainers ComposeContainer against
+		infra/docker-compose.yml, run with `-Pe2e`. Only in the reactor when that profile is
+		active, so a plain `./mvnw test` never touches this module.
 	</description>
 
 	<!--
@@ -27,7 +27,7 @@
 	    (e.g. create a user, create their device, delete the user, confirm the device is gone once
 	    device-service has a UserDeleted consumer), not exhaustive coverage - most tests belong in
 	    each service's own Layers 1-3. Build this last, once there's a second service to actually
-	    react to something (see CLAUDE.md Roadmap).
+	    react to something.
 	-->
 
 	<dependencies>
