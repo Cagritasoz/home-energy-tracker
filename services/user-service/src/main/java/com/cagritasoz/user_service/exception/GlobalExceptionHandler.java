@@ -20,32 +20,19 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
     }
 
-    @ExceptionHandler(AlertRuleNotFoundException.class)
-    public ProblemDetail handleAlertRuleNotFound(AlertRuleNotFoundException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
-    }
-
     @ExceptionHandler(DuplicateEmailException.class)
     public ProblemDetail handleDuplicateEmailException(DuplicateEmailException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }
 
-    @ExceptionHandler(DuplicateAlertRuleException.class)
-    public ProblemDetail handleDuplicateAlertRuleException(DuplicateAlertRuleException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
-    }
-
     // Safety net for every TOCTOU race in this service, not just email: two concurrent requests
-    // can both pass a pre-check (existsByEmail, existsByUserIdAndEvaluationWindowAndScope)
-    // before either commits, so each unique constraint - not the pre-check - is what actually
-    // guarantees no duplicates; a deleted-user race on alert_rules' FK lands here too. Spring
-    // translates the underlying org.postgresql.util.PSQLException into this type via
+    // can both pass the existsByEmail pre-check before either commits, so the unique constraint -
+    // not the pre-check - is what actually guarantees no duplicates. Spring translates the
+    // underlying org.postgresql.util.PSQLException into this type via
     // PersistenceExceptionTranslationPostProcessor. Deliberately generic rather than
-    // "Email already in use." (which this used to say) - that was wrong for the other two cases
-    // it now also has to cover, and telling them apart precisely would mean inspecting the
-    // triggered constraint's name (e.g. via the wrapped ConstraintViolationException), which
-    // isn't done here. The specific, correctly-worded errors (DuplicateEmailException,
-    // DuplicateAlertRuleException) already cover the common, non-racing path above.
+    // "Email already in use." (which this used to say, back when it was the only case this
+    // handler covered) - kept generic in case a second unique constraint needs this same handler
+    // again. DuplicateEmailException above already covers the common, non-racing path.
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail handleDataIntegrityViolationException(DataIntegrityViolationException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "Request conflicts with existing data.");

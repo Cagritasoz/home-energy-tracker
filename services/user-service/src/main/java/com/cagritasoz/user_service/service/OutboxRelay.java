@@ -74,8 +74,8 @@ public class OutboxRelay {
     // local bookkeeping failed - the row stays "pending" and gets resent next cycle anyway, but
     // that resend is now a genuine DUPLICATE delivery, not a first attempt. This is the concrete
     // mechanism behind this system being at-least-once rather than exactly-once, and exactly why
-    // every consumer of user-domain-events must be idempotent (see CLAUDE.md) - there is no way
-    // to close this window without a distributed transaction spanning Postgres and Kafka, which
+    // every consumer of user-domain-events must be idempotent - there is no way to close this
+    // window without a distributed transaction spanning Postgres and Kafka, which
     // nothing here (or almost anything in practice) actually does.
     private boolean publish(OutboxEvent event) {
 

@@ -6,7 +6,7 @@ import lombok.Builder;
 import java.time.Instant;
 
 // Jackson 3 orders record properties alphabetically by default and matches JSON keys to field
-// names verbatim (no snake_case conversion) - same reasoning as AlertRuleResponse.
+// names verbatim (no snake_case conversion) - hence the explicit @JsonPropertyOrder below.
 @Builder
 @JsonPropertyOrder({"id", "firstName", "lastName", "email", "address", "createdAt", "updatedAt"})
 public record UserResponse(

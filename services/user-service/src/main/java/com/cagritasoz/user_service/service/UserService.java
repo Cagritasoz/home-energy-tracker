@@ -44,8 +44,8 @@ public class UserService {
         // id/createdAt/updatedAt are populated by the DB/Hibernate on save, not before.
         User saved = userRepository.save(user);
 
-        // partitionKey == aggregateId here: a USER event's own id IS its ordering group - only
-        // ALERT_RULE_* events use a different value (their owning user's id) for partitionKey.
+        // partitionKey == aggregateId here: a USER event's own id IS its ordering group (see
+        // OutboxEvent.partitionKey's comment for why this is a separate field regardless).
         // Instant.now() rather than saved.getCreatedAt(): both are effectively "now" (save() on
         // an IDENTITY entity flushes immediately, so getCreatedAt() would actually be populated
         // here too), but using the same explicit capture in every event - create, update, and
@@ -65,9 +65,8 @@ public class UserService {
         return toResponse(saved);
     }
 
-    // Unlike getAlertRules, there's no parent to scope by and no existsById check needed -
-    // users is the top-level resource. findAll() comes free from JpaRepository, no custom
-    // repository method required.
+    // users is the top-level resource - no parent to scope by, no existsById check needed.
+    // findAll() comes free from JpaRepository, no custom repository method required.
     @Transactional(readOnly = true)
     public List<UserResponse> getUsers() {
         return userRepository.findAll()
@@ -132,11 +131,6 @@ public class UserService {
         // Recorded before the delete call, but it wouldn't matter if it were after: both the
         // outbox insert and the DELETE are flushed together at this method's commit, in the same
         // transaction - there's no partial-completion window between them either way.
-        //
-        // This is the ONLY event emitted for this user's alert_rules disappearing too - they
-        // cascade-delete via V3's DB-level FK, invisible to this method (Java code here never
-        // touches those rows), so there is no per-rule ALERT_RULE_DELETED to emit. Any consumer
-        // caching alert-rule state must treat USER_DELETED as "drop this user's rules as well" -
         outboxService.recordEvent(OutboxAggregateType.USER, user.getId(), user.getId(), OutboxEventType.USER_DELETED,
                 UserDeletedPayload.builder()
                         .userId(user.getId())

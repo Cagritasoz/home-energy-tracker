@@ -6,8 +6,5 @@ package com.cagritasoz.user_service.model;
 public enum OutboxEventType {
     USER_CREATED,
     USER_UPDATED,
-    USER_DELETED,
-    ALERT_RULE_CREATED,
-    ALERT_RULE_UPDATED,
-    ALERT_RULE_DELETED
+    USER_DELETED
 }

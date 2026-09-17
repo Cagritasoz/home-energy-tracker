@@ -5,7 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
 
-// Used for both POST and PUT - same shape for create and full replace, like AlertRuleRequest.
+// Used for both POST and PUT - same shape for create and full replace.
 // No id/createdAt/updatedAt here: those are server-assigned, never client input.
 @Builder
 public record UserRequest(

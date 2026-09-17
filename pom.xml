@@ -5,7 +5,7 @@
 
 	<parent>
 		<!--
-        Inherits Spring Boot's Maven configuration and dependency management.
+        Root inherits Spring Boot's Maven configuration and dependency management.
         The selected Spring Boot version determines the managed versions of
         Spring Boot and its compatible third-party dependencies.
         Child poms dependencies get their versions here. Single source of truth.
@@ -20,8 +20,7 @@
 	<artifactId>home-energy-tracker</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<packaging>pom</packaging> <!-- This project isn't itself a Spring Boot application/JAR. It's a POM project.
-	                                Meaning "I'm a POM that organizes other modules." Needed to declare it as root pom.
-	                           -->
+	                                Meaning "I'm a POM that organizes other modules." Needed to declare it as root pom. -->
 
 	<name>home-energy-tracker</name>
 	<description>Home energy tracking microservices - reactor/aggregator POM.</description>
