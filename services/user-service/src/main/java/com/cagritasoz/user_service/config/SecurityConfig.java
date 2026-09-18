@@ -1,30 +1,67 @@
 package com.cagritasoz.user_service.config;
 
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.annotation.web.configurers.RequestCacheConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 
-/**
- * Resource-server wiring only - no endpoint-specific authorization rules yet, because no
- * endpoints exist yet. Every request just has to carry a JWT that validates against Keycloak's
- * JWKS (spring.security.oauth2.resourceserver.jwt.issuer-uri in application.properties);
- * GET /users/me vs admin GET /users/{id} authorization comes later, once those controllers exist.
- */
 @Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+@RequiredArgsConstructor
 public class SecurityConfig {
+
+    private final KeycloakRealmRoleConverter roleConverter;
+
+    private final ProblemDetailAuthenticationEntryPoint authenticationEntryPoint;
+
+    private final ProblemDetailAccessDeniedHandler accessDeniedHandler;
+
+    @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
+    private String issuerUri;
+
+    @Value("${app.security.required-audience}")
+    private String requiredAudience;
+
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
         http
-            // CSRF protects cookie-authenticated browser sessions from a malicious page submitting
-            // a form on the user's behalf. Every request here authenticates via a bearer token,
-            // not a cookie, so there's no session to forge - leaving CSRF enabled would just
-            // reject legitimate stateless API calls for no protective benefit.
-            .csrf(AbstractHttpConfigurer::disable)
-            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {}));
+                .csrf(AbstractHttpConfigurer::disable)
+
+                .cors(Customizer.withDefaults())
+
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                .logout(AbstractHttpConfigurer::disable)
+
+                .requestCache(RequestCacheConfigurer::disable)
+
+                .authorizeHttpRequests(auth -> auth
+
+                        .requestMatchers("/api/v1/users/me").authenticated()
+
+                        .requestMatchers(HttpMethod.GET)
+
+
+
+                        .anyRequest().authenticated())
+
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {}));
+
+
         return http.build();
     }
 }
+                              // any authenticated caller
