@@ -1,21 +1,21 @@
-package com.cagritasoz.user_service.config;
+package com.cagritasoz.user_service.config.security;
 
 import lombok.NonNull;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 
-@Component
 public class AudienceValidator implements OAuth2TokenValidator<Jwt> {
 
-    @Value("${app.security.required-audience}")
-    private String requiredAudience;
+    private final String requiredAudience;
+
+    public AudienceValidator(String requiredAudience) {
+        this.requiredAudience = requiredAudience;
+    }
 
     @Override
     @NonNull

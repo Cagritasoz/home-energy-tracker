@@ -1,4 +1,4 @@
-package com.cagritasoz.user_service.config;
+package com.cagritasoz.user_service.config.security;
 
 import org.jspecify.annotations.NonNull;
 import org.springframework.core.convert.converter.Converter;
@@ -17,11 +17,10 @@ public class KeycloakRealmRoleConverter implements Converter<Jwt, Collection<Gra
 
     private static final String REALM_ACCESS = "realm_access";
     private static final String ROLES = "roles";
-    private static final String ROLE_PREFIX = "Role_";
+    private static final String ROLE_PREFIX = "ROLE_";
 
-    // Converts only "scope" claim by default.
+    // Extracts only "scope" attributes by default. Prefixes them with "SCOPE_"
     private final JwtGrantedAuthoritiesConverter scopeConverter = new JwtGrantedAuthoritiesConverter();
-
 
     @Override
     public Collection<GrantedAuthority> convert(@NonNull Jwt jwt) {

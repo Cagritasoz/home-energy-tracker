@@ -12,23 +12,14 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("api/v1/users")
+@RequestMapping("/api/v1/users/me")
 @RequiredArgsConstructor
 public class UserController {
 
     private final UserService userService;
 
-    @PostMapping
-    public ResponseEntity<UserResponse> createUser(@Valid @RequestBody UserRequest userRequest) {
-
-        UserResponse createdUser = userService.createUser(userRequest);
-
-        return ResponseEntity.status(HttpStatus.CREATED).body(createdUser);
-
-    }
-
     @GetMapping
-    public ResponseEntity<List<UserResponse>> getUsers() {
+    public ResponseEntity<List<UserResponse>> getMe() {
 
         List<UserResponse> foundUsers = userService.getUsers();
 
@@ -36,7 +27,7 @@ public class UserController {
 
     }
 
-    @GetMapping("/{id}")
+    @GetMapping()
     public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
 
         UserResponse foundUser = userService.getUserById(id);

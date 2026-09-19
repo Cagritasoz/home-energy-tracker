@@ -1,4 +1,4 @@
-package com.cagritasoz.user_service.config;
+package com.cagritasoz.user_service.config.security;
 
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,17 +32,18 @@ public class ProblemDetailAuthenticationEntryPoint implements AuthenticationEntr
 
         ProblemDetail problemDetail = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
 
-        problemDetail.setType(URI.create("https://home-energy-tracker/problems/unauthotized"));
+        problemDetail.setType(URI.create("https://home-energy-tracker/problems/unauthorized"));
 
         problemDetail.setTitle("Unauthorized");
-
         problemDetail.setDetail(authException instanceof InvalidBearerTokenException
-                ? "The access token is missing, expired or invalid."
-                : "Authentication is required to access this resource.");
+                // BearerTokenAuthenticationFilter validation failed should get this detail.
+                ? "The access token is expired, malformed, or not valid for this service."
+                // Missing token should get this detail.
+                : "Authentication is required. Provide a valid bearer token.");
 
         problemDetail.setInstance(URI.create(request.getRequestURI()));
 
-        // problemDetail.setProperty("timestamp", Instant.now().toString());
+        problemDetail.setProperty("timestamp", Instant.now().toString());
 
         response.addHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
 

@@ -1,6 +1,6 @@
 You are an expert distributed systems and software architect. Based on our existing codebase and service registry, I need you to perform a rigorous feasibility study and architectural critique of my proposed design for the `usage-service`.
 
-CRITICAL INSTRUCTIONS: Do NOT generate or apply any application code changes. This is strictly an architectural design and an evaluation task. Write your entire analysis, trade-offs, and structural recommendations to  `docs/architecture/usage-service/02-architecture-review.md` file. Clearly write the current date and time to the file.
+CRITICAL INSTRUCTIONS: Do NOT generate or apply any application code changes. This is strictly an architectural design and an evaluation task. Write your entire analysis, trade-offs, and structural recommendations to  `02-usage-service-proposed-plan-response.md` file. Clearly write the current date and time to the file.
 
 First inspect the repository thoroughly before evaluating the architecture. Identify the currently implemented services, Kafka topics/events, database schemas, transactional outbox implementation, Docker infrastructure, InfluxDB integration, service boundaries, and existing configuration. Clearly distinguish between currently implemented behavior, proposed behavior, and your recommended architecture. Do not assume that the proposed architecture is correct.
 
@@ -48,4 +48,4 @@ What must the *other* services do to make this architecture possible? Define the
 #### 5. Recovery and Rebuildability
 If usage-service PostgreSQL or Redis is completely lost, can usage-service reconstruct its state from Kafka and/or upstream services? If not, identify which state is recoverable, which is not, Kafka retention requirements, replay strategy, and whether the architecture accidentally creates a non-rebuildable database.
 
-Begin your evaluation now. Write all findings, suggestions, and structural blueprints directly to `docs/architecture/usage-service/02-architecture-review.md`. Do not apply code changes to the repo.
+Begin your evaluation now. Write all findings, suggestions, and structural blueprints directly to `02-usage-service-proposed-plan-response.md`. Do not apply code changes to the repo.

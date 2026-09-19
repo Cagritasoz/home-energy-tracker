@@ -1,4 +1,4 @@
-package com.cagritasoz.user_service.config;
+package com.cagritasoz.user_service.config.security;
 
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,7 +39,7 @@ public class ProblemDetailAccessDeniedHandler implements AccessDeniedHandler {
 
         problemDetail.setInstance(URI.create(request.getRequestURI()));
 
-        // problemDetail.setProperty("timestamp", Instant.now());
+        problemDetail.setProperty("timestamp", Instant.now());
 
         response.setStatus(HttpStatus.FORBIDDEN.value());
 

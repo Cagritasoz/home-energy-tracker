@@ -1,9 +1,9 @@
 # usage-service — Architectural Review
 
 **Review date/time:** 2026-09-13 16:12 (UTC+03:00, Europe/Istanbul)
-**Reviewed revision:** `9d9be1a` plus the uncommitted working-tree changes present at review time (user-service outbox `@SkipLogging` work, `CLAUDE.md` status update, one comment added to `UsageService`).
-**Input:** `docs/architecture/usage-service/01-architecture-review-prompt.md`
-**Scope:** architecture and feasibility only. No application code, `CLAUDE.md`, or the prompt file was modified.
+**Reviewed revision:** `9d9be1a` plus the uncommitted working-tree changes present at review time (user-service outbox `@SkipLogging` work, `../../../CLAUDE.md` status update, one comment added to `UsageService`).
+**Input:** `01-usage-service-proposed-plan-prompt.md`
+**Scope:** architecture and feasibility only. No application code, `../../../CLAUDE.md`, or the prompt file was modified.
 
 This document is organised as the prompt requests (Sections 1–5), preceded by what the repository actually contains (Section 0), because several of the prompt's premises do not match the code. Throughout, every claim is tagged as one of:
 
@@ -23,7 +23,7 @@ The prompt describes usage-service as if it already had a local PostgreSQL, a Re
 | Service | Port | Persistence | Kafka role | Notable dependencies |
 |---|---|---|---|---|
 | `user-service` | 8080 | Postgres schema `user_service` (Flyway V1–V4) | **Producer** of `user-domain-events` via transactional outbox | data-jpa, kafka, aspectj, validation |
-| `device-service` | 8081 | Postgres schema `device_service` (Flyway V1 only) | **None** — `pom.xml` has no Kafka starter at all | data-jpa, http-client (REST to user-service), aspectj |
+| `device-service` | 8081 | Postgres schema `device_service` (Flyway V1 only) | **None** — `../../../pom.xml` has no Kafka starter at all | data-jpa, http-client (REST to user-service), aspectj |
 | `ingestion-service` | 8082 | none | **Producer** of `energy-usage-events` | kafka, webmvc, validation |
 | `usage-service` | 8083 | **none** — no data-jpa, no Flyway, no datasource | **Consumer** of `energy-usage-events`; producer to `energy-usage-events-dlt` only | kafka, webmvc, http-client, `influxdb3-java` 1.11.0 |
 
@@ -72,7 +72,7 @@ One correctness subtlety, verified by reading the code paths and not flagged any
 
 ### 0.5 Reading model [CURRENT vs decided]
 
-The wire field is still `consumedEnergy` (a per-tick delta, `@Positive`). `CLAUDE.md` records the decision to move to a **cumulative register** (`cumulativeEnergyKwh`, `@PositiveOrZero`) with per-device simulator state. Not implemented. This review evaluates alert evaluation against the *decided* cumulative model, because that is what will exist when evaluation is built, and it changes the query shape materially (§1.3).
+The wire field is still `consumedEnergy` (a per-tick delta, `@Positive`). `../../../CLAUDE.md` records the decision to move to a **cumulative register** (`cumulativeEnergyKwh`, `@PositiveOrZero`) with per-device simulator state. Not implemented. This review evaluates alert evaluation against the *decided* cumulative model, because that is what will exist when evaluation is built, and it changes the query shape materially (§1.3).
 
 ### 0.6 Infrastructure facts that constrain the design
 
@@ -105,7 +105,7 @@ The wire field is still `consumedEnergy` (a per-tick delta, `@Positive`). `CLAUD
 
 1. **Ingestion path.** Kafka → validate → InfluxDB write is a standard shape. The current implementation's ceiling is not the cache lookup (a `HashSet.contains` is nanoseconds) but the **one synchronous HTTP write per record on a single consumer thread**. Order-of-magnitude: a local InfluxDB write round trip is a few ms, so the current code tops out in the low hundreds to low thousands of points per second per partition, with the three `log.info` calls per record contributing measurably. This is fixable in place: batch listener (`spring.kafka.listener.type=batch`) + `writePoints(List<Point>)`, more partitions + `concurrency`, and per-record logging demoted to `debug`. No architectural change needed. **[RECOMMENDED]**
 
-2. **Evaluation path.** "Thousands of active alert rules" is only a problem if evaluation is per-rule. Rules are bounded to 8 distinct windows and one scope, and the cumulative model makes the per-window computation an "as-of" subtraction. `CLAUDE.md` already records the right design: **≈1 + (distinct windows in use) bulk queries per tick, each returning one row per device**, then join and group in the application. That cost is flat in the number of rules and linear in the number of *devices*. With 1 000 devices it is trivially cheap; with 100 000 devices it is ~9 result sets of 100 000 rows per tick, which InfluxDB 3's DataFusion engine handles but which starts to matter at a 1-minute cadence in JVM memory and Arrow deserialization. That is the realistic ceiling of the polling design, and it is far above this project's scale.
+2. **Evaluation path.** "Thousands of active alert rules" is only a problem if evaluation is per-rule. Rules are bounded to 8 distinct windows and one scope, and the cumulative model makes the per-window computation an "as-of" subtraction. `../../../CLAUDE.md` already records the right design: **≈1 + (distinct windows in use) bulk queries per tick, each returning one row per device**, then join and group in the application. That cost is flat in the number of rules and linear in the number of *devices*. With 1 000 devices it is trivially cheap; with 100 000 devices it is ~9 result sets of 100 000 rows per tick, which InfluxDB 3's DataFusion engine handles but which starts to matter at a 1-minute cadence in JVM memory and Arrow deserialization. That is the realistic ceiling of the polling design, and it is far above this project's scale.
 
 3. **State replication.** Replicating *users* (names, emails, addresses) into usage-service has no consumer inside usage-service. Evaluation needs `ruleId, userId, window, threshold, enabled` and `deviceId → userId`. Nothing else. See §1.2 and §3 for the minimal state.
 
@@ -125,7 +125,7 @@ The wire field is still `consumedEnergy` (a per-tick delta, `@Positive`). `CLAUD
 
 **Trap 1 — per-rule queries.** If evaluation is written as `for rule in rules: query(rule.user, rule.window)`, cost is O(rules × window) round trips per tick, each a Flight/gRPC call with Arrow decoding. At 5 000 rules and a 60 s tick that is ~80 queries/s continuously, with InfluxDB doing the same "last reading per device" scan 5 000 times. **Avoid.** Bulk as-of per window, join in memory.
 
-**Trap 2 — `GROUP BY user_id` in InfluxDB requires `user_id` as a tag written at ingest.** `CLAUDE.md`'s roadmap plans this. It has a hidden cost: tags are part of the series key. A reading written while the device→user mapping is unknown gets *no* `user_id` tag (or a placeholder); "fixing" it later means rewriting the point into a **different series**, and the old point stays. You end up with a reconciliation job that rewrites history. **[RECOMMENDED]** do **not** write `user_id` into InfluxDB. Keep `device_id` as the only tag; query as-of values *per device* (one row per device per boundary); map device→user and sum in usage-service using its local mapping. This makes the "unknown at ingest" problem disappear (§3.2) and keeps InfluxDB free of a second service's identity.
+**Trap 2 — `GROUP BY user_id` in InfluxDB requires `user_id` as a tag written at ingest.** `../../../CLAUDE.md`'s roadmap plans this. It has a hidden cost: tags are part of the series key. A reading written while the device→user mapping is unknown gets *no* `user_id` tag (or a placeholder); "fixing" it later means rewriting the point into a **different series**, and the old point stays. You end up with a reconciliation job that rewrites history. **[RECOMMENDED]** do **not** write `user_id` into InfluxDB. Keep `device_id` as the only tag; query as-of values *per device* (one row per device per boundary); map device→user and sum in usage-service using its local mapping. This makes the "unknown at ingest" problem disappear (§3.2) and keeps InfluxDB free of a second service's identity.
 
 **Trap 3 — the scheduler thread is shared.** Spring Boot's `@Scheduled` pool defaults to one thread. A slow evaluation tick (InfluxDB query timeout is 30 s in `InfluxDBConfig`) will delay `DeviceIdCache.refresh()` and any other scheduled task, and a hung refresh (5 s read timeout) delays evaluation. Set `spring.task.scheduling.pool.size` ≥ 2 or give evaluation its own executor (§2.2).
 
@@ -133,7 +133,7 @@ The wire field is still `consumedEnergy` (a per-tick delta, `@Positive`). `CLAUD
 
 **Trap 5 — as-of queries are hard to index-hit without `time <= boundary` pushdown.** The planned `ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY time DESC)` filtered to `time <= boundary` is correct SQL for DataFusion, but bound it: `WHERE time <= $boundary AND time >= $boundary - $maxStaleness`. Without the lower bound, "last reading as of now − 24 h" scans all history for devices that have gone silent. The max-staleness cap in the roadmap is not only a data-quality rule; it is what keeps the query bounded.
 
-**Trap 6 — cumulative counter resets.** Deferred in `CLAUDE.md`, but evaluation must at least *detect* `latest < earlier` and treat the delta as "unknown" (skip device this tick, emit a metric), never as a negative usage that masks a real threshold breach on the user's other devices.
+**Trap 6 — cumulative counter resets.** Deferred in `../../../CLAUDE.md`, but evaluation must at least *detect* `latest < earlier` and treat the delta as "unknown" (skip device this tick, emit a metric), never as a negative usage that masks a real threshold breach on the user's other devices.
 
 **Trap 7 — InfluxDB 3 Core's 72-hour query window [UNVERIFIED]**. Fine for `ONE_DAY` windows; would break any longer window or any "last month" endpoint added later. Check before committing to 3 Core for anything beyond alerting.
 
@@ -367,7 +367,7 @@ Option A is recommended for this project's stage; Option B becomes worthwhile if
 **Independently of A/B:**
 
 - **Firing state lives in usage-service's Postgres, in the same transaction as the `ThresholdExceeded` outbox row.** That gives usage-service its own outbox (copy the pattern a third time; the repo's naming conventions make this mechanical) and makes "alert emitted" and "rule marked as fired" atomic. Redis is an acceptable *cache* of this, never its only home.
-- **Readings:** InfluxDB is the only durable copy beyond Kafka retention. If readings matter beyond alerting, InfluxDB needs backups (object-store mode in 3.x makes this a bucket snapshot) — this is outside usage-service's rebuildability but inside the system's. If InfluxDB is lost, resetting the `usage-service` group offset to `earliest` re-ingests the last ≈7 days; the cumulative model means evaluation is correct again as soon as one reading per device has landed, which is the "self-healing" property `CLAUDE.md` notes.
+- **Readings:** InfluxDB is the only durable copy beyond Kafka retention. If readings matter beyond alerting, InfluxDB needs backups (object-store mode in 3.x makes this a bucket snapshot) — this is outside usage-service's rebuildability but inside the system's. If InfluxDB is lost, resetting the `usage-service` group offset to `earliest` re-ingests the last ≈7 days; the cumulative model means evaluation is correct again as soon as one reading per device has landed, which is the "self-healing" property `../../../CLAUDE.md` notes.
 - **DLTs**: raise their retention (e.g. 30 days) so a failure is not silently aged out before anyone looks.
 - **Document the retention number** in `docker-compose.yml` explicitly rather than inheriting a floating-tag default, and decide it deliberately (7 days is fine *if* Option A exists; without A or B it is the rebuild deadline).
 
@@ -388,7 +388,7 @@ Option A is recommended for this project's stage; Option B becomes worthwhile if
 
 **Upstream obligations, in build order:** (1) user-service `V5` `version` columns + payload field; (2) device-service outbox + `device-domain-events` + `USER_DELETED` consumer + owners snapshot endpoint; (3) user-service cross-user enabled-rules endpoint; (4) ingestion-service cumulative rename + `max.block.ms`; (5) usage-service as above; (6) alerting-service consumes `threshold-exceeded-events` and is the only place that needs user email.
 
-**Deviations from `CLAUDE.md`'s roadmap that this review recommends and that should be reconciled there if accepted:** dropping the plan to write `user_id` as an InfluxDB tag and to `GROUP BY user_id` in InfluxDB (replaced by per-device as-of rows joined in usage-service); expanding `DeviceIdCache` into an owner map fed by a new `/owners` endpoint rather than `/ids`; adding per-consumer-group DLT naming; adding `version` to users/alert_rules now rather than later; explicitly rejecting Redis. Per the project's maintenance rule, `CLAUDE.md` should be updated in the same change that adopts any of these — this review deliberately did not edit it.
+**Deviations from `../../../CLAUDE.md`'s roadmap that this review recommends and that should be reconciled there if accepted:** dropping the plan to write `user_id` as an InfluxDB tag and to `GROUP BY user_id` in InfluxDB (replaced by per-device as-of rows joined in usage-service); expanding `DeviceIdCache` into an owner map fed by a new `/owners` endpoint rather than `/ids`; adding per-consumer-group DLT naming; adding `version` to users/alert_rules now rather than later; explicitly rejecting Redis. Per the project's maintenance rule, `../../../CLAUDE.md` should be updated in the same change that adopts any of these — this review deliberately did not edit it.
 
 ---
 

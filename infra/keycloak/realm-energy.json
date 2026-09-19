@@ -11,6 +11,7 @@
   "registrationEmailAsUsername": true,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
+  "//duplicateEmailsAllowed": "When this setting is set to false check if it blocks an email from getting used belonging to a disabled user",
   "//verifyEmail": "Will be set to true once mailpit exists.",
   "//resetPasswordAllowed": "Will be set to true once mailpit exists.",
   "editUsernameAllowed": false,
@@ -106,7 +107,7 @@
           }
         }
       ],
-      "//mappers": "Puts 'user-service' in aud. Without it, aud is only ['account'] and audience validator rejects everything."
+      "//protocolMappers": "Puts 'user-service' in aud. Without it, aud is only ['account'] and audience validator rejects everything."
     }
 
   ],
