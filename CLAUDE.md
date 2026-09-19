@@ -121,6 +121,8 @@ The CRUD-+-outbox build described in earlier versions of this file (`V1`–`V4`)
 
 **What's preserved from before, for when eventing is rebuilt (read, don't re-derive from scratch):** the outbox pattern's actually-reliable properties (`recordEvent` joins the caller's transaction, `published_at` only set after a confirmed Kafka ack, relay stops the batch on first failed send, consumers filter on Kafka headers rather than deserializing everything) and the one real bug already found and fixed once (`OutboxRelay` self-invoking `markPublished` via `this.` silently bypassed Spring's transactional proxy — see Coding conventions' self-invocation rule) are exactly the kind of mistake worth not re-making when `outbox_events` comes back.
 
+**Topic declaration removed (2026-09-19):** user-service's `KafkaTopicConfig` (the `NewTopic` bean for `user-domain-events`) is deleted — the topic layout is being redesigned. `OutboxRelay` still reads `app.kafka.topic.user-domain` and broker auto-create is off, so nothing creates that topic anymore; publishing can't work until the redesigned topic is declared again. The Config convention above (topics as `NewTopic` beans) still holds for ingestion-service and usage-service, which keep their own `KafkaTopicConfig`.
+
 **Known gaps carried forward:** zero automated test coverage (unchanged — see Testing strategy); `trace_id`/`correlation_id` still project-wide-not-started; `LoggingAspect` still has no field-level redaction (was flagged against `OutboxService.recordEvent`'s payload logging — moot until outbox eventing is rebuilt, but the aspect gap itself is unrelated to this reset and still real).
 
 ## Testing strategy (0% coverage today — the plan for closing it)

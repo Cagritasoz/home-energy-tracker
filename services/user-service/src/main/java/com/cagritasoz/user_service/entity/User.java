@@ -1,11 +1,13 @@
 package com.cagritasoz.user_service.entity;
 
+import com.cagritasoz.user_service.model.UserStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "users")
@@ -16,30 +18,44 @@ import java.time.Instant;
 public class User {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY) // BIGSERIAL
-    private Long id;
+    private UUID id;
 
-    @Column(name = "first_name", length = 100, nullable = false)
-    private String firstName;
-
-    @Column(name = "last_name", length = 100, nullable = false)
-    private String lastName;
-
-    @Column(length = 255, unique = true, nullable = false)
+    @Column(nullable = false)
     private String email;
 
-    @Column(columnDefinition = "TEXT")
-    private String address;
+    @Column(name = "display_name", nullable = false)
+    private String displayName;
 
-    // Populated by Hibernate on INSERT, never on UPDATE (updatable = false) - mirrors the
-    // DEFAULT now() in V2 so a row written outside the app still gets a value. TIMESTAMPTZ maps
-    // to Instant. Audit columns never reaches the database as null as hibernate
-    // populates them even though we do not include them while building a User object.
+    @Builder.Default
+    @Column(nullable = false)
+    private String timezone = "UTC";
+
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private UserStatus status = UserStatus.ACTIVE;
+
+    @Version
+    @Column(nullable = false)
+    private Long version;
+
+    @Builder.Default
+    @Column(name = "devices_deleted", nullable = false)
+    private boolean devicesDeleted = false;
+
+    @Column(name = "keycloak_disabled_at")
+    private Instant keycloakDisabledAt;
+
+    @Column(name = "deletion_requested_at")
+    private Instant deletionRequestedAt;
+
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    // Rewritten by Hibernate on every flush that dirties this entity.
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;

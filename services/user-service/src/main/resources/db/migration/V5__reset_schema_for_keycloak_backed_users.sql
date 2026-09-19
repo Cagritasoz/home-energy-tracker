@@ -8,8 +8,8 @@
 -- either and could drop anywhere, but goes first anyway to read top-to-bottom as "most temporary/
 -- least permanent first" alongside the comments below explaining each table's fate.
 
--- Fully redesigned once that design exists, not just retyped for UUID - not guessed at here.
--- processed_events (for idempotent event consumption) arrives alongside it, same migration.
+-- Outbox table is fully redesigned and will be included in next migrations.
+-- processed_events table (for idempotent event consumption) will also be arriving for devices_deleted column.
 DROP TABLE outbox_events;
 
 -- Gone for good, not reset: alert rules move to their own dedicated service in the new design, so
@@ -27,6 +27,7 @@ CREATE TABLE users (
     status                text        NOT NULL DEFAULT 'ACTIVE',
     version               bigint      NOT NULL DEFAULT 0,
     devices_deleted       boolean     NOT NULL DEFAULT false,
+    keycloak_disabled_at  timestamptz,
     deletion_requested_at timestamptz,
     deleted_at            timestamptz,
     created_at            timestamptz NOT NULL DEFAULT now(),
