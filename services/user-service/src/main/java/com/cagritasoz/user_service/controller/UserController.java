@@ -1,15 +1,18 @@
 package com.cagritasoz.user_service.controller;
 
-import com.cagritasoz.user_service.dto.UserRequest;
+import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
+import java.util.Objects;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/users/me")
@@ -19,38 +22,34 @@ public class UserController {
     private final UserService userService;
 
     @GetMapping
-    public ResponseEntity<List<UserResponse>> getMe() {
+    public ResponseEntity<UserResponse> getMe(@AuthenticationPrincipal Jwt token) {
 
-        List<UserResponse> foundUsers = userService.getUsers();
+        UserResponse user = userService.getUser(currentUserId(token));
 
-        return ResponseEntity.ok(foundUsers);
-
-    }
-
-    @GetMapping()
-    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
-
-        UserResponse foundUser = userService.getUserById(id);
-
-        return ResponseEntity.ok(foundUser);
+        return ResponseEntity.ok(user);
 
     }
 
-    @PutMapping("/{id}")
-    public ResponseEntity<UserResponse> updateUser(@PathVariable Long id,
-                                                    @Valid @RequestBody UserRequest userRequest) {
+    @PatchMapping
+    public ResponseEntity<UserResponse> updateMe(@AuthenticationPrincipal Jwt token,
+                                                @Valid @RequestBody UpdateUserRequest request) {
 
-        UserResponse updatedUser = userService.updateUser(id, userRequest);
+        UserResponse user = userService.updateUser(currentUserId(token), request);
 
-        return ResponseEntity.ok(updatedUser);
+        return ResponseEntity.ok(user);
 
     }
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteUser(@PathVariable Long id) {
+    @DeleteMapping
+    public ResponseEntity<Void> deleteMe(@AuthenticationPrincipal Jwt token) {
 
-        userService.deleteUser(id);
+        userService.requestDeletion(currentUserId(token));
 
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.status(HttpStatus.ACCEPTED).build();
+    }
+
+    private UUID currentUserId(Jwt token) {
+        return UUID.fromString(Objects.requireNonNull(token.getSubject())); // Fail loudly if null. Should not happen.
     }
 }
+
