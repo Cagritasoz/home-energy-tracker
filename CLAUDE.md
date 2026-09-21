@@ -11,7 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `services/user-service`, `services/device-service`, `services/ingestion-service`, `services/usage-service` — the four services below, unchanged except for their POM's `<parent>`.
 - `infra/` — `docker-compose.yml`, `.env.example`, `.env` (gitignored, as before). **All docker-related services and their properties live here now, going forward** — postgres/keycloak/prometheus/grafana/tempo config, once any of those exist, join it here rather than at repo root.
 - `e2e/` — Layer 4 cross-service tests (Testcontainers `ComposeContainer` against `infra/docker-compose.yml`). **Stub: builds, zero test classes yet.** Only enters the reactor under the `-Pe2e` profile, so a plain `./mvnw test` never touches it.
-- Planned, not yet built: `services/alert-service`, `services/notification-service`, `services/ai-insight-service`, `services/api-gateway` (see Roadmap), `scripts/`.
+- Planned, not yet built: `services/alert-service`, `services/notification-service`, `services/ai-insight-service`, `services/api-gateway` (see Roadmap).
+- `scripts/` — local-dev helpers. `get-token.ps1 -Role user|admin` prints a Keycloak access token for the seeded test/admin user (PowerShell; a `.sh` equivalent is not written yet).
 - Root `pom.xml` `<dependencyManagement>` pins BOMs for Spring Cloud, Spring AI, Resilience4j and Testcontainers — imported for the modules above that need them once they exist; nothing consumes Spring Cloud/Spring AI yet.
 
 **Design principle: model real IoT energy devices as accurately as reasonable**, not a convenient simplification. This has already driven one real design change — see "Reading model" in the Roadmap — and should keep informing future choices (e.g. device behavior, failure modes) over whatever is easiest to fake.
@@ -29,7 +30,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cd infra
 cp .env.example .env          # then fill in real values
-docker compose up -d          # postgres, kafka (KRaft), kafka-ui (:8070), influxdb
+docker compose up -d          # user-db, keycloak-db, keycloak - all user-service needs
+docker compose --profile kafka up -d      # + kafka (KRaft) and kafka-ui (:8070)
+docker compose --profile influxdb up -d   # + influxdb (usage-service only)
 docker exec -it influxdb influxdb3 create token --admin   # one-time; export result as INFLUXDB3_AUTH_TOKEN
 ```
 Or from repo root: `docker compose -f infra/docker-compose.yml --env-file infra/.env up -d`.
@@ -65,23 +68,24 @@ Producer and consumer **each define their own copy** of the event record — the
 ### Identity (Keycloak)
 `infra/keycloak/realm-energy.json` is imported into Keycloak automatically on first boot (`start-dev --import-realm`, mounted read-only) — it only imports into an *empty* Keycloak instance, so editing it requires `docker compose down -v` (dropping Keycloak's own storage) before the next `up` for the change to take effect. It pre-creates:
 - Realm `energy-tracker`.
-- Client `local-dev` (confidential, `directAccessGrantsEnabled` + `standardFlowEnabled` both on) — a **local-testing stand-in for the future api-gateway client**, not a real application. Its secret (`local-dev-secret`) is committed in that file on purpose — it's a throwaway local-dev credential, not a real one; treat it like any other value in this repo's `.env.example`, not like the `.env`-only rule in Coding conventions' Secrets bullet.
-- Test user `testuser` / `testpassword`, with a **fixed** id (`11111111-1111-1111-1111-111111111111`) so its Keycloak subject — and therefore `users.id` — stays the same across every `down -v && up` reset during local dev.
+- Client `local-dev` (confidential, `directAccessGrantsEnabled` + `standardFlowEnabled` both on) — a **local-testing stand-in for the future api-gateway client**, not a real application. Its secret (`secret`) is committed in that file on purpose — it's a throwaway local-dev credential, not a real one; treat it like any other value in this repo's `.env.example`, not like the `.env`-only rule in Coding conventions' Secrets bullet.
+- Admin user `admin@example.com` / `Adminpassword1` (realm role `ADMIN`, fixed id `22222222-2222-2222-2222-222222222222`) for `/api/v1/admin/**`.
+- Test user `testuser@example.com` / `Testpassword1` (realm role `USER`), with a **fixed** id (`11111111-1111-1111-1111-111111111111`) so its Keycloak subject — and therefore `users.id` — stays the same across every `down -v && up` reset during local dev.
 
 **Getting a JWT locally** (direct access grant — username+password straight to Keycloak's token endpoint, no browser):
 ```bash
-curl -X POST http://localhost:8180/realms/energy-tracker/protocol/openid-connect/token \
+curl -X POST http://keycloak:8180/realms/energy-tracker/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d grant_type=password \
   -d client_id=local-dev \
-  -d client_secret=local-dev-secret \
-  -d username=testuser \
-  -d password=testpassword
+  -d client_secret=secret \
+  -d username=testuser@example.com \
+  -d password=Testpassword1
 ```
 The response's `access_token` is the JWT; its `sub` claim is `11111111-1111-1111-1111-111111111111` — that's the `users.id` value a first `GET /users/me` call would need a matching row for. Send it as `Authorization: Bearer <access_token>` on requests to user-service.
 
-**user-service side:** `spring-boot-starter-security-oauth2-resource-server` (see the pom.xml comment — Boot 4.1.1 deprecated the non-`security-`-prefixed artifact name in favor of this one) + `spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost:8180/realms/energy-tracker` + a `SecurityConfig` requiring authentication on every request. **No endpoint-specific authorization exists yet** because no endpoints exist yet (see "user-service — status") — this is resource-server wiring only, proven only to the extent that "every request needs a valid JWT" is enforced, not tested end-to-end against a real controller.
-**Known gap, deliberately deferred:** no audience (`aud`) claim validation configured — Keycloak's default access-token audience is `account`, not scoped to a specific resource server. Not a problem with one standalone service and no gateway yet; revisit once api-gateway exists and multiple services need to trust *different* audiences from the same realm.
+**user-service side:** `spring-boot-starter-security-oauth2-resource-server` (see the pom.xml comment — Boot 4.1.1 deprecated the non-`security-`-prefixed artifact name in favor of this one) + `spring.security.oauth2.resourceserver.jwt.issuer-uri=http://keycloak:8180/realms/energy-tracker` (the host name `keycloak` must resolve on the dev machine: add `127.0.0.1 keycloak` to the hosts file, because Keycloak's `KC_HOSTNAME` pins the `iss` claim to that URL) + a `SecurityConfig` requiring authentication on every request, `/api/v1/admin/users/**` restricted to realm role `ADMIN`, and an audience check for `user-service`. None of this has been tested end-to-end against a running Keycloak yet.
+**Audience:** `local-dev` carries an audience mapper that adds `user-service` to `aud` (Keycloak's default is only `account`), and user-service rejects tokens without it. Revisit once api-gateway exists and multiple services need to trust *different* audiences from the same realm.
 **Port 8180, not Keycloak's own default 8080** — 8080 is already user-service's port (see the service table above).
 
 ### Persistence
@@ -100,28 +104,27 @@ Application-level `existsBy…` pre-check for a clean 409 **plus** a DB unique c
 
 ## Coding conventions (respect these when making changes)
 
-- **Naming.** Pick the clearest, most accurate name for every class, field, local variable, method, and endpoint — and keep it **uniform across all four services**, not just locally consistent. Established patterns: methods `create{E}` / `get{E}ById` / `get{E}s` / `update{E}` / `delete{E}`; controller locals `created{E}` / `found{E}` / `updated{E}`; request DTO `{E}Request`, response `{E}Response` (older code still has a single `{E}Dto` — the split is the target); `{E}NotFoundException` / `Duplicate{X}Exception`; layer-first packages (`controller`, `service`, `repository`, `entity`, `dto`, `model`, `exception`, `config`, `aspect`, `event`). Check how sibling services name a concept before introducing a name, and call out inconsistent names in code under review.
 - **Comments.** This is a learning project — heavy explanatory comments are intentional and stay until the final product. Explain non-obvious decisions and anything the user may not already know. Do not strip comments as "cleanup."
 - **Entities.** Lombok `@Data @Builder @NoArgsConstructor @AllArgsConstructor`. Any field with a default value needs `@Builder.Default`, or the builder path writes `null` into a `NOT NULL` column. Exclude lazy `@ManyToOne` fields from `equals`/`hashCode`/`toString`.
 - **Config.** `@Value` into `@Bean` factory methods (`RestClientConfig`, `KafkaTopicConfig`, `InfluxDBConfig`); topics are declared as `NewTopic` beans (broker auto-create is off).
 - **Secrets** stay in `.env` (gitignored). Never hardcode credentials or paste tokens into code/commits.
 - **Never call a `@Transactional` (or otherwise AOP-advised) method via plain `this.` from inside its own class.** Spring implements `@Transactional`/`@Scheduled`/aspect advice via a proxy wrapping the bean; a self-invocation bypasses that proxy entirely, so the annotation silently does nothing - no error, just quietly-wrong behavior (this actually happened: `OutboxRelay` self-calling its own `markPublished` meant `published_at` was never really persisted, so every tick would have re-published the same rows forever - fixed by moving that method onto `OutboxService` and calling it as a genuine cross-bean call). If a method needs its own transaction/advice, put it on a different bean and call it from there.
 
-## user-service — status: schema reset for Keycloak identity (2026-09-15); application code has not caught up yet
+## user-service — status: self-service and admin read APIs implemented; eventing and the deletion finalizer not built yet
 
 The CRUD-+-outbox build described in earlier versions of this file (`V1`–`V4`) was manually verified end-to-end and worked — but user identity was an app-generated `BIGSERIAL`, which doesn't survive fronting the system with Keycloak: the id a JWT's `sub` claim carries has to be the id every service uses, or every service needs an id-mapping lookup that doesn't otherwise need to exist. `V5` (2026-09-15) resets the schema around that: `users.id` is now the Keycloak subject (`uuid`, never DB-generated), plus a three-state soft-delete lifecycle (`status` `ACTIVE`/`DELETING`/`DELETED`, `deletion_requested_at`/`deleted_at`, `devices_deleted` as a saga-completion flag) and a `version` column doing double duty as JPA optimistic-locking *and* the event `aggregateVersion` once eventing is rebuilt. Every column's reasoning is in `V5`'s own comments — don't duplicate it here, read the migration.
 
 **This was a deliberate, scoped decision, not a start-from-nothing reset:** `outbox_events` (whose `aggregate_id`/`partition_key` can't stay a single `BIGINT` once the user id it carries is UUID) is dropped in the same migration rather than patched, since its UUID-native shape hasn't been designed yet. It — plus a new `processed_events` table for idempotent event consumption — comes back in a later migration once that design exists; don't guess at its shape ahead of that. `alert_rules` is also dropped, but **permanently, not pending redesign** — alert rules move to their own dedicated service in the new design and have no future in user-service at all. Every `AlertRule*` class (entity, repository, service, controller, DTOs, exceptions, `AlertScope`/`EvaluationWindow`, the `ALERT_RULE*` outbox enum values) has already been deleted from this codebase, not just left to go stale — see git history around 2026-09-16.
 
-**Current state of the remaining Java code: stale against the new `users` schema, not yet touched.** `User`/`OutboxEvent` entities, their repositories/services/controllers/DTOs/exceptions, and `OutboxRelay`/`OutboxService` all still describe the pre-`V5` `users` shape (`Long` id, first/last name instead of `display_name`, no `status`/`version`/soft-delete columns). They still compile (Java doesn't know about the DB), but **`spring.jpa.hibernate.ddl-auto=validate` will fail at Spring context startup** against the actual `V5` schema — the service cannot run yet. Rewriting them for the new schema and the target API surface below is the next work, not started.
+**Current state of the Java code (matches the `V5`/`V6` schema).** `User` maps the new `users` table; the legacy `OutboxEvent` entity, its repository, `OutboxService` and `OutboxRelay` are deleted (Hibernate's `ddl-auto=validate` would otherwise fail startup on the dropped `outbox_events` table), as is `UserRequest`. Orphaned and still to be removed or redesigned with the outbox: `OutboxAggregateType`/`OutboxEventType`, `UserChangedPayload`/`UserDeletedPayload`, and the unused `spring.kafka.*` / `app.outbox.*` properties. Accounts are created only by `UserProvisioningService` (just-in-time, via `UserProvisioningInterceptor`); `UserService` covers `GET`/`PATCH`/`DELETE` on `/api/v1/users/me` (`DELETE` = `markDeleting`, an atomic native `ACTIVE`→`DELETING` compare-and-set using DB time) and `UserAdminService` covers the admin reads.
 
-**Target API surface (not implemented yet):** `GET /users/me`, `PATCH /users/me`, `DELETE /users/me` (soft: flips `status` to `DELETING`, sets `deletion_requested_at` — actual deletion is the async saga `V5`'s columns model, not an immediate row delete), admin `GET /users/{id}`. `userId` comes from the validated JWT's `sub`, not a path variable or request body — see "Identity (Keycloak)" above for how requests authenticate.
+**API surface.** Implemented: `GET`/`PATCH`/`DELETE /api/v1/users/me` and admin `GET /api/v1/admin/users` (paged, fixed sort `createdAt DESC, id`, `size` ≤ 100) and `GET /api/v1/admin/users/{id}`. Not implemented: admin `DELETE`, the deletion finalizer (Keycloak disable, device-cleanup ack, `DELETING`→`DELETED`), outbox events. `userId` comes from the validated JWT's `sub` for `/me`; see "Identity (Keycloak)" for how requests authenticate.
 
 **Also done alongside the schema reset:** Keycloak is running in `infra/docker-compose.yml` and user-service has resource-server wiring (`SecurityConfig`, `issuer-uri`) requiring a valid JWT on every request — see "Identity (Keycloak)" above. This is infrastructure/security wiring only; it has no endpoint to protect yet.
 
 **What's preserved from before, for when eventing is rebuilt (read, don't re-derive from scratch):** the outbox pattern's actually-reliable properties (`recordEvent` joins the caller's transaction, `published_at` only set after a confirmed Kafka ack, relay stops the batch on first failed send, consumers filter on Kafka headers rather than deserializing everything) and the one real bug already found and fixed once (`OutboxRelay` self-invoking `markPublished` via `this.` silently bypassed Spring's transactional proxy — see Coding conventions' self-invocation rule) are exactly the kind of mistake worth not re-making when `outbox_events` comes back.
 
-**Topic declaration removed (2026-09-19):** user-service's `KafkaTopicConfig` (the `NewTopic` bean for `user-domain-events`) is deleted — the topic layout is being redesigned. `OutboxRelay` still reads `app.kafka.topic.user-domain` and broker auto-create is off, so nothing creates that topic anymore; publishing can't work until the redesigned topic is declared again. The Config convention above (topics as `NewTopic` beans) still holds for ingestion-service and usage-service, which keep their own `KafkaTopicConfig`.
+**Topic declaration removed (2026-09-19):** user-service's `KafkaTopicConfig` (the `NewTopic` bean for `user-domain-events`) is deleted — the topic layout is being redesigned. `OutboxRelay` is deleted too, and broker auto-create is off, so nothing creates or publishes to that topic anymore until the redesigned topic is declared again. The Config convention above (topics as `NewTopic` beans) still holds for ingestion-service and usage-service, which keep their own `KafkaTopicConfig`.
 
 **Known gaps carried forward:** zero automated test coverage (unchanged — see Testing strategy); `trace_id`/`correlation_id` still project-wide-not-started; `LoggingAspect` still has no field-level redaction (was flagged against `OutboxService.recordEvent`'s payload logging — moot until outbox eventing is rebuilt, but the aspect gap itself is unrelated to this reset and still real).
 

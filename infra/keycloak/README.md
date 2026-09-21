@@ -1,0 +1,154 @@
+"Keycloak can not parse "//" comments, removing them entirely from realm file, pasted here for later use instead."
+
+{
+"realm": "energy-tracker",
+"enabled": true,
+"displayName": "Home Energy Tracker",
+"displayNameHtml": "<strong>Home Energy Tracker</strong>",
+"//diplayNameHtml": "strong tag for bold text.",
+
+"sslRequired": "none",
+
+"registrationAllowed": true,
+"registrationEmailAsUsername": true,
+"loginWithEmailAllowed": true,
+"duplicateEmailsAllowed": false,
+"//duplicateEmailsAllowed": "When this setting is set to false check if it blocks an email from getting used belonging to a disabled user",
+"//verifyEmail": "Will be set to true once mailpit exists.",
+"//resetPasswordAllowed": "Will be set to true once mailpit exists.",
+"editUsernameAllowed": false,
+"rememberMe": true,
+
+"bruteForceProtected": true,
+"permanentLockout": false,
+"failureFactor": 10,
+"waitIncrementSeconds": 60,
+"maxFailureWaitSeconds": 900,
+"maxDeltaTimeSeconds": 43200,
+"quickLoginCheckMilliSeconds": 1000,
+"minimumQuickLoginWaitSeconds": 60,
+"passwordPolicy": "length(10) and digits(1) and lowerCase(1) and upperCase(1) and notUsername and notEmail and hashAlgorithm(argon2)",
+
+"accessTokenLifespan": 300,
+"accessCodeLifespan": 60,
+"actionTokenGeneratedByUserLifespan": 300,
+"ssoSessionIdleTimeout": 1800,
+"ssoSessionMaxLifespan": 36000,
+"offlineSessionIdleTimeout": 2592000,
+"revokeRefreshToken": true,
+"refreshTokenMaxReuse": 0,
+
+"//smtpServer": "Will be configured once mailpit exists.",
+
+"roles": {
+"realm": [
+{
+"name": "USER",
+"description": "Standard application user"
+},
+{
+"name": "ADMIN",
+"description": "Administrative access to all user records"
+},
+{
+"name": "default-roles-energy-tracker",
+"description": "Roles granted automatically to every new user",
+"composite": true,
+"composites": {
+"realm": ["offline_access", "uma_authorization", "USER"],
+"client": {
+"account": ["view-profile", "manage-account"]
+}
+}
+}
+]
+},
+
+"defaultRole": {
+"name": "default-roles-energy-tracker",
+"composite": true,
+"clientRole": false
+},
+
+"clients": [
+{
+"clientId": "local-dev",
+"name": "Local dev / test-token client",
+"enabled": true,
+"protocol": "openid-connect",
+
+      "publicClient": false,
+      "secret": "secret",
+      "//secret": "Secret is a throwaway value for now.",
+
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "fullScopeAllowed": true,
+      "//fullScopeAllowed": "Tokens from this client carry every role the user holds with true.",
+
+      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
+      "webOrigins": ["+"],
+
+      "defaultClientScopes": ["basic", "acr", "profile", "email", "roles", "web-origins"],
+      "optionalClientScopes": ["address", "phone", "offline_access"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+
+      "protocolMappers": [
+        {
+          "name": "user-service-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "user-service",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ],
+      "//protocolMappers": "Puts 'user-service' in aud. Without it, aud is only ['account'] and audience validator rejects everything."
+    }
+
+],
+
+"users": [
+{
+"id": "11111111-1111-1111-1111-111111111111",
+"username": "testuser@example.com",
+"email": "testuser@example.com",
+"emailVerified": true,
+"//emailVerified": "Skips email verification entirely, assume that step is completed.",
+"enabled": true,
+"firstName": "Test",
+"lastName": "User",
+"realmRoles": ["default-roles-energy-tracker"],
+"credentials": [
+{
+"type": "password",
+"value": "Testpassword1",
+"temporary": false
+}
+]
+},
+{
+"id": "22222222-2222-2222-2222-222222222222",
+"username": "admin@example.com",
+"email": "admin@example.com",
+"emailVerified": true,
+"enabled": true,
+"firstName": "Admin",
+"lastName": "User",
+"realmRoles": ["default-roles-energy-tracker", "ADMIN"],
+"credentials": [
+{
+"type": "password",
+"value": "Adminpassword1",
+"temporary": false
+}
+]
+}
+]
+}

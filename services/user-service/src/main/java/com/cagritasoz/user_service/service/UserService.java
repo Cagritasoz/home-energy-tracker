@@ -11,10 +11,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
-// Self-service operations on the caller's own account. There is no createUser here on purpose:
-// accounts are created just-in-time by UserProvisioningService the first time a valid token
-// shows up, and there is no delete either - see requestDeletion for why. Every method takes the
-// id from the validated JWT subject (the controller passes it in), never from the request body.
+// Self-service operations on the caller's own account (what an administrator can do to any account
+// lives in UserAdminService). There is no createUser here on purpose: accounts are created
+// just-in-time by UserProvisioningService the first time a valid token shows up, and there is no
+// delete either - see requestDeletion for why. Every method takes the id from the validated JWT
+// subject (the controller passes it in), never from the request body.
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -107,5 +108,6 @@ public class UserService {
                 .updatedAt(user.getUpdatedAt())
                 .build();
     }
+
 }
 

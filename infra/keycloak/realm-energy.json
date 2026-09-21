@@ -3,7 +3,6 @@
   "enabled": true,
   "displayName": "Home Energy Tracker",
   "displayNameHtml": "<strong>Home Energy Tracker</strong>",
-  "//diplayNameHtml": "strong tag for bold text.",
 
   "sslRequired": "none",
 
@@ -11,9 +10,6 @@
   "registrationEmailAsUsername": true,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
-  "//duplicateEmailsAllowed": "When this setting is set to false check if it blocks an email from getting used belonging to a disabled user",
-  "//verifyEmail": "Will be set to true once mailpit exists.",
-  "//resetPasswordAllowed": "Will be set to true once mailpit exists.",
   "editUsernameAllowed": false,
   "rememberMe": true,
 
@@ -36,10 +32,20 @@
   "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
 
-  "//smtpServer": "Will be configured once mailpit exists.",
-
   "roles": {
     "realm": [
+      {
+        "name": "offline_access",
+        "description": "${role_offline-access}",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "uma_authorization",
+        "description": "${role_uma_authorization}",
+        "composite": false,
+        "clientRole": false
+      },
       {
         "name": "USER",
         "description": "Standard application user"
@@ -77,14 +83,12 @@
 
       "publicClient": false,
       "secret": "secret",
-      "//secret": "Secret is a throwaway value for now.",
 
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
       "frontchannelLogout": true,
       "fullScopeAllowed": true,
-      "//fullScopeAllowed": "Tokens from this client carry every role the user holds with true.",
 
       "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
       "webOrigins": ["+"],
@@ -106,8 +110,7 @@
             "id.token.claim": "false"
           }
         }
-      ],
-      "//protocolMappers": "Puts 'user-service' in aud. Without it, aud is only ['account'] and audience validator rejects everything."
+      ]
     }
 
   ],
@@ -118,7 +121,6 @@
       "username": "testuser@example.com",
       "email": "testuser@example.com",
       "emailVerified": true,
-      "//emailVerified": "Skips email verification entirely, assume that step is completed.",
       "enabled": true,
       "firstName": "Test",
       "lastName": "User",
