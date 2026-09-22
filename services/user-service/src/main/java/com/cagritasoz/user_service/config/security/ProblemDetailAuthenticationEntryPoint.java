@@ -45,7 +45,7 @@ public class ProblemDetailAuthenticationEntryPoint implements AuthenticationEntr
 
         problemDetail.setProperty("timestamp", Instant.now().toString());
 
-        response.addHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+        response.addHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"energy-tracker\"");
 
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
 

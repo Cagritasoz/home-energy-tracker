@@ -39,7 +39,7 @@ public class ProblemDetailAccessDeniedHandler implements AccessDeniedHandler {
 
         problemDetail.setInstance(URI.create(request.getRequestURI()));
 
-        problemDetail.setProperty("timestamp", Instant.now());
+        problemDetail.setProperty("timestamp", Instant.now().toString());
 
         response.setStatus(HttpStatus.FORBIDDEN.value());
 

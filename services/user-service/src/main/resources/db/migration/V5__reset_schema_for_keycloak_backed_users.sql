@@ -19,6 +19,11 @@ DROP TABLE alert_rules;
 
 DROP TABLE users;
 
+-- Every primary key automatically gets an associated unique index.
+-- A unique index handles concurrency: If two users try to register at the exact same millisecond,
+-- the unique index guarantees that only one will succeed. This conflict can either be a loud fail
+-- or handled via "ON CONFLICT (col) DO NOTHING" which is what user provisioning does.
+
 CREATE TABLE users (
     id                    uuid        CONSTRAINT pk_users PRIMARY KEY,
     email                 text        NOT NULL,
@@ -30,8 +35,8 @@ CREATE TABLE users (
     keycloak_disabled_at  timestamptz,
     deletion_requested_at timestamptz,
     deleted_at            timestamptz,
-    created_at            timestamptz NOT NULL DEFAULT now(),
-    updated_at            timestamptz NOT NULL DEFAULT now(),
+    created_at            timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at            timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT chk_users_status CHECK (status IN ('ACTIVE','DELETING','DELETED')),
 

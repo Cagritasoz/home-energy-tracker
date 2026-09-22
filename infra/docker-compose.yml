@@ -51,6 +51,8 @@ services:
   influxdb:
     image: influxdb:3-core
     container_name: influxdb
+    # Not started by a plain `up`: only usage-service needs it. `--profile influxdb` adds it.
+    profiles: [ "influxdb" ]
     ports:
       - "8181:8181"                               # HTTP API - query/write/admin, all on one port
     command:
@@ -75,6 +77,8 @@ services:
   kafka-broker-controller-1:
     image: apache/kafka:latest
     container_name: kafka-broker-controller-1
+    # Not started by a plain `up`; `--profile kafka` starts the broker and kafka-ui together.
+    profiles: [ "kafka" ]
     ports:
       - "9092:9092"
       - "9094:9094"
@@ -124,8 +128,9 @@ services:
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:latest
     container_name: kafka-ui
+    profiles: [ "kafka" ]
     ports:
-      - "8070:8070"
+      - "8070:8080"
     depends_on:
       kafka-broker-controller-1:
         condition: service_healthy # Wait for the broker to actually accept connections, not just start.

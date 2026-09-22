@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.service;
 
+import com.cagritasoz.user_service.aspect.SkipLogging;
 import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.exception.AccountNotActiveException;
 import com.cagritasoz.user_service.exception.EmailNotVerifiedException;
@@ -7,7 +8,6 @@ import com.cagritasoz.user_service.exception.MissingIdentityClaimException;
 import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,12 +22,14 @@ public class UserProvisioningService {
     private final UserRepository userRepository;
 
     @Transactional
+    @SkipLogging
+    // TODO: Evaluate whether it is worth it for other services to use the found/provisioned user without firing a separate "findById" query.
     public void ensureUsable(Jwt token) {
 
         UUID sub = UUID.fromString(Objects.requireNonNull(token.getSubject()));
 
         User user = userRepository.findById(sub)
-                .orElseGet(() -> insertFromClaims(sub, token)); // If user does not exist, insert user.
+                .orElseGet(() -> provision(sub, token)); // If user does not exist, insert user.
 
         if(user.getStatus() != UserStatus.ACTIVE) { // Reject tokens that have outlived the accounts' usability.
 
@@ -36,10 +38,12 @@ public class UserProvisioningService {
         }
     }
 
-    private User insertFromClaims(UUID sub, Jwt token) {
+    // TODO: Handle a user's email changing case.
+    private User provision(UUID sub, Jwt token) {
 
         String email = token.getClaimAsString("email");
 
+        // Defensive checks, in theory these checks should never throw.
         if(email == null || email.isBlank()) {
 
             throw new MissingIdentityClaimException("email");
@@ -52,20 +56,17 @@ public class UserProvisioningService {
 
         }
 
-        User user = User.builder()
-                .id(sub)
-                .email(email)
-                .displayName(resolveDisplayName(token))
-                .build();
+        // Handle racing requests, joins the same transaction as "ensureUsable()" method.
+        // The losing transaction doesn't do "nothing" immediately.
+        // If the winner hasn't committed yet, the loser waits on the primary key until
+        // the winner commits or rolls back and only then does nothing.
+        // If the winner rolls back, the loser's insert succeeds.
+        userRepository.insertIgnoringConflict(sub, email, resolveDisplayName(token));
 
-        try {
-
-            return userRepository.saveAndFlush(user);
-
-        } catch (DataIntegrityViolationException e) {
-            return userRepository.findById(sub)
-                    .orElseThrow(() -> e);
-        }
+        // The request with the losing transaction still gets the inserted user via fallback query. No deliberate 409.
+        // Only true under READ COMMITTED which is the default.
+        return userRepository.findById(sub)
+                .orElseThrow(() -> new IllegalStateException("User " + sub + " missing after provisioning."));
     }
 
     private String resolveDisplayName(Jwt token) {
