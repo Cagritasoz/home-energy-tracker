@@ -36,9 +36,10 @@ public class UserProvisioningService {
             throw new AccountNotActiveException();
 
         }
+
+        syncEmailIfChanged(user, token);
     }
 
-    // TODO: Handle a user's email changing case.
     private User provision(UUID sub, Jwt token) {
 
         String email = token.getClaimAsString("email");
@@ -67,6 +68,31 @@ public class UserProvisioningService {
         // Only true under READ COMMITTED which is the default.
         return userRepository.findById(sub)
                 .orElseThrow(() -> new IllegalStateException("User " + sub + " missing after provisioning."));
+    }
+
+    // Runs on every request, not just provisioning: a user can change their email in Keycloak long
+    // after their account row was first created, and nothing else ever looks at it again
+    // otherwise. Only compares against the already-loaded entity - no extra query - and only
+    // writes when something actually changed, so the common case (no change) costs nothing beyond
+    // the comparison. Requiring email_verified here too stops an in-progress Keycloak email change
+    // (old address still active until the new one is confirmed) from overwriting the row early.
+    private void syncEmailIfChanged(User user, Jwt token) {
+
+        String email = token.getClaimAsString("email");
+
+        if (email == null || email.equals(user.getEmail())) {
+
+            return;
+
+        }
+
+        if (!Boolean.TRUE.equals(token.getClaimAsBoolean("email_verified"))) {
+
+            return;
+
+        }
+
+        userRepository.syncEmail(user.getId(), email);
     }
 
     private String resolveDisplayName(Jwt token) {
