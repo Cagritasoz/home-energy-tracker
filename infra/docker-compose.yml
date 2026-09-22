@@ -75,7 +75,7 @@ services:
       retries: 5
 
   kafka-broker-controller-1:
-    image: apache/kafka:latest
+    image: apache/kafka:4.3.1
     container_name: kafka-broker-controller-1
     # Not started by a plain `up`; `--profile kafka` starts the broker and kafka-ui together.
     profiles: [ "kafka" ]
@@ -126,7 +126,7 @@ services:
       start_period: 30s # For the first 30 seconds after container starts, don't treat failed healthchecks as evidence that the container is unhealthy.
 
   kafka-ui:
-    image: ghcr.io/kafbat/kafka-ui:latest
+    image: ghcr.io/kafbat/kafka-ui:v1.5.0
     container_name: kafka-ui
     profiles: [ "kafka" ]
     ports:

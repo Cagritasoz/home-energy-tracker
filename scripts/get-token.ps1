@@ -2,10 +2,9 @@
 .SYNOPSIS
     Gets a local-dev access token from Keycloak for the test user or the admin user.
 
-.CHECK
-    "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned" to allow for running scripts if following error is encountered:
-    "cannot be loaded because running scripts is disabled on this system."
-
+.NOTES
+    If this fails with "cannot be loaded because running scripts is disabled on this system",
+    run once: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 .DESCRIPTION
     Uses the "local-dev" client's direct access grant (username + password straight to the token
