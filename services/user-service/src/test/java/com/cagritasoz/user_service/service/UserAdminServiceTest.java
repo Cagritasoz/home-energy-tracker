@@ -41,11 +41,12 @@ class UserAdminServiceTest {
     private static final UUID USER_ID_2 = UUID.fromString("22222222-2222-2222-2222-222222222222");
     private static final UUID USER_ID_3 = UUID.fromString("33333333-3333-3333-3333-333333333333");
 
+    // Just the id and createdAt overrides - UserFixtures.deletedUser() already defaults to Arthur
+    // Morgan (via activeUser()), and every other saga-bookkeeping column this class cares about
+    // (status, version, devicesDeleted, the timestamps) already comes from that default.
     private User deletedUser() {
         return UserFixtures.deletedUser()
                 .id(USER_ID_1)
-                .email("kanye@example.com")
-                .displayName("Kanye West")
                 .createdAt(Instant.parse("2025-10-15T14:32:18Z")) // predates UserFixtures' default
                 .build();
     }
@@ -58,7 +59,6 @@ class UserAdminServiceTest {
         UserAdminResponse response = userAdminService.getUser(USER_ID_1);
 
         assertThat(response).usingRecursiveComparison().isEqualTo(deletedUser());
-
     }
 
     @Test
@@ -68,7 +68,6 @@ class UserAdminServiceTest {
 
         assertThatThrownBy(() -> userAdminService.getUser(USER_ID_1))
                 .isInstanceOf(UserNotFoundException.class);
-
     }
 
     // listUsers's return value can't show whether the sort is really fixed - Page<UserAdminResponse>
@@ -105,20 +104,20 @@ class UserAdminServiceTest {
 
         User user2 = UserFixtures.activeUser()
                 .id(USER_ID_2)
-                .email("leon@example.com")
-                .displayName("Leon Kennedy")
+                .email(UserFixtures.LEON_KENNEDY_EMAIL)
+                .displayName(UserFixtures.LEON_KENNEDY_NAME)
                 .build();
 
         User user3 = UserFixtures.deletedUser()
                 .id(USER_ID_3)
-                .email("arthur@example.com")
-                .displayName("Arthur Morgan")
+                .email(UserFixtures.JOHN_MARSTON_EMAIL)
+                .displayName(UserFixtures.JOHN_MARSTON_NAME)
                 .deletionRequestedAt(Instant.parse("2026-01-31T23:31:42Z"))
                 .build();
 
         when(userRepository.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(user1, user2, user3)));
 
-        Page<UserAdminResponse> page = userAdminService.listUsers(0,20);
+        Page<UserAdminResponse> page = userAdminService.listUsers(0, 20);
 
         assertThat(page.getContent())
                 .extracting(UserAdminResponse::id, UserAdminResponse::email, UserAdminResponse::deletionRequestedAt)
