@@ -1,6 +1,5 @@
 package com.cagritasoz.user_service.exception;
 
-import jakarta.validation.constraints.Null;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NullMarked;
@@ -132,13 +131,20 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // fields those are missing so all error bodies look the same.
     @Override
     @NullMarked
-    protected @Null ResponseEntity<Object> createResponseEntity(@Nullable Object body,
+    protected ResponseEntity<Object> createResponseEntity(@Nullable Object body,
                                                                 HttpHeaders headers,
                                                                 HttpStatusCode statusCode,
                                                                 WebRequest request) {
         if (body instanceof ProblemDetail problemDetail) {
 
-            if (Objects.requireNonNull(problemDetail.getType()).equals(URI.create("about:blank"))) {
+            // Spring 7 leaves a ProblemDetail's type null when nobody set one (Spring 6 defaulted it
+            // to "about:blank" explicitly) - RFC 9457 says an absent type means "about:blank", so
+            // both are treated as "no real type yet". The old requireNonNull turned that into an
+            // NPE for every ProblemDetail Spring built itself, which made Spring fall back to an
+            // empty-bodied sendError instead of reaching this method's result.
+            URI type = problemDetail.getType();
+
+            if (type == null || type.equals(URI.create("about:blank"))) {
 
                 HttpStatus status = HttpStatus.resolve(statusCode.value());
 

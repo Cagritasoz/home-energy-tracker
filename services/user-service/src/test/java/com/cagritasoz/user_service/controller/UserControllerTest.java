@@ -136,10 +136,6 @@ class UserControllerTest {
         verify(userService).getUser(USER_ID);
     }
 
-    // TODO: getMe_userNotFound_returns404 - stub userService.getUser to throw
-    //       UserNotFoundException, confirm GlobalExceptionHandler's wiring (via
-    //       .setControllerAdvice above) actually produces a 404 ProblemDetail through the full
-    //       mini-stack, not just in GlobalExceptionHandlerTest's isolation.
     @Test
     void getMe_userNotFound_returns404() throws Exception {
 
