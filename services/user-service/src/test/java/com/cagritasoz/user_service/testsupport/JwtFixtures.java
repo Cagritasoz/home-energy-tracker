@@ -15,13 +15,16 @@ public final class JwtFixtures {
     // so the display-name fallback chain never has to run unless a test deliberately builds on
     // minimalToken() instead. header("alg", "none") plus at least one claim are the only two
     // things Jwt itself actually requires in order to build successfully.
+    //
+    // The email/name claims reuse UserFixtures.ARTHUR_MORGAN_EMAIL/_NAME rather than repeating the
+    // literals here - see UserFixtures' own comment on those constants for why.
     public static Jwt.Builder validUser(UUID subject) {
         return Jwt.withTokenValue("test-token")
                 .header("alg", "none")
                 .subject(subject.toString())
-                .claim("email", "test.user@example.com")
+                .claim("email", UserFixtures.ARTHUR_MORGAN_EMAIL)
                 .claim("email_verified", true)
-                .claim("name", "Test User");
+                .claim("name", UserFixtures.ARTHUR_MORGAN_NAME);
     }
 
     // Only a subject - the starting point for "this claim is genuinely missing" tests. Build on

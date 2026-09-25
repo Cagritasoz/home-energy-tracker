@@ -48,12 +48,11 @@ class UserServiceTest {
     @InjectMocks
     private UserService userService;
 
-    // Fields overwritten. Last one wins.
+    // Just the id override - UserFixtures.activeUser() already defaults to Arthur Morgan, and
+    // this class only ever needs the one person.
     private User activeUser() {
         return UserFixtures.activeUser()
                 .id(USER_ID)
-                .email("ada@example.com")
-                .displayName("Ada Wong")
                 .build();
     }
 
@@ -68,8 +67,8 @@ class UserServiceTest {
         // Assert: the service's own mapping (toResponse) is what's under test here, not the
         // repository - so the interesting assertions are on the DTO's fields, not on the mock.
         assertThat(response.id()).isEqualTo(USER_ID);
-        assertThat(response.email()).isEqualTo("ada@example.com");
-        assertThat(response.displayName()).isEqualTo("Ada Wong");
+        assertThat(response.email()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(response.displayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
     }
 
     @Test
@@ -93,10 +92,10 @@ class UserServiceTest {
         when(userRepository.saveAndFlush(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         UserResponse response = userService.updateUser(USER_ID,
-                UpdateUserRequest.builder().displayName("  Ada Wong  ").build());
+                UpdateUserRequest.builder().displayName("  " + UserFixtures.LEON_KENNEDY_NAME + "  ").build());
 
-        assertThat(response.displayName()).isEqualTo("Ada Wong"); // stripped
-        assertThat(response.timezone()).isEqualTo("UTC");             // untouched: PATCH semantics
+        assertThat(response.displayName()).isEqualTo(UserFixtures.LEON_KENNEDY_NAME); // stripped
+        assertThat(response.timezone()).isEqualTo("UTC");                             // untouched: PATCH semantics
     }
 
     @Test
@@ -107,7 +106,7 @@ class UserServiceTest {
 
         UserResponse response = userService.updateUser(USER_ID, UpdateUserRequest.builder().build());
 
-        assertThat(response.displayName()).isEqualTo("Ada Wong");
+        assertThat(response.displayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
         assertThat(response.timezone()).isEqualTo("UTC");
     }
 

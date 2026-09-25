@@ -80,7 +80,7 @@ public class UserProvisioningService {
 
         String email = token.getClaimAsString("email");
 
-        if (email == null || email.equals(user.getEmail())) {
+        if (email == null || email.isBlank() || email.equals(user.getEmail())) {
 
             return;
 

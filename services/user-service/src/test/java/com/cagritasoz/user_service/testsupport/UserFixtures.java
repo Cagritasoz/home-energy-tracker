@@ -17,11 +17,24 @@ public final class UserFixtures {
     private UserFixtures() {
     }
 
+    // Every fixture defaults to Arthur Morgan unless a test needs a second or third, genuinely
+    // distinct person (e.g. UserAdminServiceTest's multi-user listUsers test uses all three).
+    // JwtFixtures.validUser() reuses these same constants for its own default email/name claims
+    // rather than duplicating the literals there too - several tests rely on "the token's email
+    // equals the stored email" being true by default, and two independently-typed string literals
+    // that merely happen to match is exactly the kind of thing that quietly drifts apart later.
+    public static final String ARTHUR_MORGAN_EMAIL = "arthur.morgan@example.com";
+    public static final String ARTHUR_MORGAN_NAME = "Arthur Morgan";
+    public static final String LEON_KENNEDY_EMAIL = "leon.kennedy@example.com";
+    public static final String LEON_KENNEDY_NAME = "Leon Kennedy";
+    public static final String JOHN_MARSTON_EMAIL = "john.marston@example.com";
+    public static final String JOHN_MARSTON_NAME = "John Marston";
+
     public static User.UserBuilder activeUser() {
         return User.builder()
                 .id(UUID.randomUUID())
-                .email("test.user@example.com")
-                .displayName("Test User")
+                .email(ARTHUR_MORGAN_EMAIL)
+                .displayName(ARTHUR_MORGAN_NAME)
                 .timezone("UTC")
                 .status(UserStatus.ACTIVE)
                 .version(0L)
