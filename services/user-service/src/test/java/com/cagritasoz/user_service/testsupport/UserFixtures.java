@@ -29,6 +29,17 @@ public final class UserFixtures {
     public static final String LEON_KENNEDY_NAME = "Leon Kennedy";
     public static final String JOHN_MARSTON_EMAIL = "john.marston@example.com";
     public static final String JOHN_MARSTON_NAME = "John Marston";
+    public static final String JACK_CARVER_EMAIL = "jack.carver@example.com";
+    public static final String JACK_CARVER_NAME = "Jack Carver";
+    public static final String JASON_BRODY_EMAIL = "jason.brody@example.com";
+    public static final String JASON_BRODY_NAME = "Jason Brody";
+
+    public static User.UserBuilder minimalUser() {
+        return User.builder()
+                .id(UUID.randomUUID())
+                .email(ARTHUR_MORGAN_EMAIL)
+                .displayName(ARTHUR_MORGAN_NAME);
+    }
 
     public static User.UserBuilder activeUser() {
         return User.builder()

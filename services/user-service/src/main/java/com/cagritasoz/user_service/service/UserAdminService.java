@@ -37,7 +37,7 @@ public class UserAdminService {
     public Page<UserAdminResponse> listUsers(int page, int size) {
 
         PageRequest pageRequest = PageRequest.of(page, size,
-                Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id")));
+                Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id"))); // ORDER BY created_at DESC, id ASC
 
         return userRepository.findAll(pageRequest).map(this::toResponse);
     }

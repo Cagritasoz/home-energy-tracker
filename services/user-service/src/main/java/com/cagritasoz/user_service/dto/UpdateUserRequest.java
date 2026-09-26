@@ -23,6 +23,7 @@ public record UpdateUserRequest(
 
         // JIT provisioning creates every account as UTC; the client sets the real one here.
         // Not validated as an IANA zone id yet - anything is accepted and stored as sent.
+        // TODO: Add a timezone validator.
         String timezone
 
 ) {
