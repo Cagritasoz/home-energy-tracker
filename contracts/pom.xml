@@ -23,16 +23,23 @@
 		Plain jar, no Spring dependency - producers/consumers depend on this instead of each other's packages.
 	</description>
 
+	<dependencies>
+
+		<!-- Compile-time only (optional = not passed on to modules that depend on contracts), for @Builder on
+		     the event records like every other DTO in this project. Nothing else: this jar stays dependency-free. -->
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+	</dependencies>
+
 	<!--
-	    STUB MODULE - no source yet. This is a deliberate reversal of a decision documented in the
-	    root CLAUDE.md ("Kafka event contract (important)"): today, producer and consumer each define
-	    their own copy of the event record on purpose, so neither service depends on the other's
-	    packages, and the wire contract is enforced only through spring.json.type.mapping + the
-	    __TypeId__ header. Centralizing event/DTO classes here means every consumer of this jar now
-	    depends on it directly, which is exactly the coupling that design avoided. Wired into the
-	    reactor now so the module exists and builds (empty jar), but don't add classes here until
-	    that tradeoff has actually been decided - and CLAUDE.md's Kafka contract section gets rewritten
-	    in the same change once it is.
+	    The shared vocabulary of the user/device events on Kafka (decided 2026-09-26, reversing the earlier
+	    "each side keeps its own copy" approach for these events): the event envelope, the per-event data
+	    records, event-type names, topic and header names. Plain classes only - no Spring, no JPA, no
+	    logic beyond field validation. Services depend on it with a normal <dependency> on this artifact.
 	-->
 
 	<!-- No <build> section needed: spring-boot-maven-plugin is only in spring-boot-starter-parent's

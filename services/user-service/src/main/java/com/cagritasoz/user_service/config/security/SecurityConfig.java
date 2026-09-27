@@ -62,7 +62,7 @@ public class SecurityConfig {
 
                         // Infrastructure (Docker healthchecks, the Layer 4 test suite) calls this
                         // without a token. Deliberately just /actuator/health, not /actuator/** -
-                        // only "health" is exposed over HTTP at all (see application.properties),
+                        // only "health" is exposed over HTTP at all (see application.yaml),
                         // and nothing under /actuator should ever be open-ended public.
                         .requestMatchers("/actuator/health").permitAll()
 

@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 // Layer 1: no Spring context, no database, no Kafka - just this
@@ -40,6 +41,9 @@ class UserServiceTest {
     // told what to return with when(...), or it comes back null/0/empty by default.
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private OutboxService outboxService;
 
     // Builds a real UserService, but hands it the @Mock above instead of a real
     // UserRepository bean. Works here because UserService has exactly one dependency injected
@@ -83,42 +87,78 @@ class UserServiceTest {
     }
 
     @Test
-    void updateUser_displayNameOnly_leavesTimezoneUnchanged() {
+    void updateUser_displayNameOnly_leavesTimezoneUnchangedAndRecordsUpdatedEvent() {
         User existing = activeUser();
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(existing));
-        // saveAndFlush is stubbed to hand back whatever entity it was called with - close enough
-        // to what Hibernate really does here (it mutates and returns the same managed instance)
-        // without needing a real EntityManager.
-        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // saveAndFlush is stubbed to hand back the same entity it was called with, but with its
+        // version bumped - mirroring what Hibernate's own dirty checking really does when a field
+        // actually changed (confirmed empirically, not assumed: see the Layer 2 probe this test
+        // class's own comment references). updateUser() only records an event when the version
+        // moved, so a stub that left it unchanged would silently defeat that check.
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(invocation -> {
+            User saved = invocation.getArgument(0);
+            saved.setVersion(saved.getVersion() + 1);
+            return saved;
+        });
 
         UserResponse response = userService.updateUser(USER_ID,
                 UpdateUserRequest.builder().displayName("  " + UserFixtures.LEON_KENNEDY_NAME + "  ").build());
 
         assertThat(response.displayName()).isEqualTo(UserFixtures.LEON_KENNEDY_NAME); // stripped
-        assertThat(response.timezone()).isEqualTo("UTC");                             // untouched: PATCH semantics
+        assertThat(response.timezone()).isEqualTo("UTC"); // untouched: PATCH semantics
+
+        verify(outboxService).recordUserUpdated(existing);
     }
 
     @Test
     void updateUser_emptyRequest_isANoOpButStillSaves() {
         User existing = activeUser();
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(existing));
+        // Nothing changes, so a real saveAndFlush would leave the version exactly as it was -
+        // this stub mirrors that (unlike the test above, no version bump), which is what makes
+        // this test actually prove the no-op case, not just assert it by naming the method that way.
         when(userRepository.saveAndFlush(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         UserResponse response = userService.updateUser(USER_ID, UpdateUserRequest.builder().build());
 
         assertThat(response.displayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
         assertThat(response.timezone()).isEqualTo("UTC");
+
+        // The whole point of the no-op case: an unchanged save must not announce a change that
+        // never happened.
+        verifyNoInteractions(outboxService);
     }
 
     @Test
-    void requestDeletion_activeAccount_stopsAfterMarkDeletingWins() {
+    void requestDeletion_activeAccount_stopsAfterMarkDeletingWinsAndRecordsDeletionRequestedEvent() {
         // markDeleting returning 1 means "this call won the compare-and-set" (see its own comment
         // in UserRepository) - requestDeletion must not go on to call existsById in that case.
         when(userRepository.markDeleting(USER_ID)).thenReturn(1);
+        // The winner re-reads the row (markDeleting is a native query, so this is a fresh read, not
+        // the same stale entity anyone might have loaded earlier) to build the event from what the
+        // database actually holds now.
+        User deletingUser = activeUser();
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(deletingUser));
 
         userService.requestDeletion(USER_ID);
 
         verify(userRepository, never()).existsById(any());
+        verify(outboxService).recordUserDeletionRequested(deletingUser);
+    }
+
+    // Should be impossible inside one transaction (markDeleting just committed this same row), so
+    // it's reported as an error rather than swallowed - the deterministic, single-threaded shape of
+    // the same trap UserProvisioningServiceTest's provision() tests guard against.
+    @Test
+    void requestDeletion_userMissingAfterMarkDeletingWon_throwsIllegalState() {
+        when(userRepository.markDeleting(USER_ID)).thenReturn(1);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.requestDeletion(USER_ID))
+                .isInstanceOf(IllegalStateException.class);
+
+        verifyNoInteractions(outboxService);
     }
 
     @Test
@@ -130,6 +170,10 @@ class UserServiceTest {
         userService.requestDeletion(USER_ID);
         // Nothing to assert on a void, idempotent call beyond "it didn't throw" - if it had thrown,
         // this test would already have failed before reaching here.
+
+        // Nothing changed, so nothing is announced - a request that loses the race, or finds the
+        // account already past ACTIVE, must not emit a second UserDeletionRequested.
+        verifyNoInteractions(outboxService);
     }
 
     @Test
@@ -139,5 +183,7 @@ class UserServiceTest {
 
         assertThatThrownBy(() -> userService.requestDeletion(USER_ID))
                 .isInstanceOf(UserNotFoundException.class);
+
+        verifyNoInteractions(outboxService);
     }
 }

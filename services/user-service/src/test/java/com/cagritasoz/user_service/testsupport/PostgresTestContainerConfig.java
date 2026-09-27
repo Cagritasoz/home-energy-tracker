@@ -10,7 +10,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 //
 // How it works: Spring creates the container bean, starts it (Docker pulls the image the first time),
 // and because of @ServiceConnection it reads the container's random host port, user and password and
-// uses them as the DataSource - overriding spring.datasource.* in application.properties. So no
+// uses them as the DataSource - overriding spring.datasource.* in application.yaml. So no
 // USER_DB_PASSWORD env var and no docker compose are needed to run these tests.
 //
 // Flyway then migrates the empty database exactly like production, and Hibernate's

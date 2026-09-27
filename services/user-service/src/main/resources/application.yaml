@@ -1,0 +1,96 @@
+spring:
+  application:
+    name: user-service
+
+  web:
+    # force English regardless of client Accept-Language / OS locale (validation messages were resolving to Turkish otherwise)
+    locale: en_US
+    locale-resolver: fixed
+
+  # Only the password is a secret - db name and username are structural config, not credentials,
+  # so they're hardcoded here to match user-db's own hardcoded values (infra/docker-compose.yml)
+  # instead of routed through an env var the way host/port were already hardcoded below even before this.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/user_service
+    username: user_service
+    password: ${USER_DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  # No currentSchema / spring.flyway.schemas here on purpose, unlike the old shared-instance setup -
+  # user-db (infra/docker-compose.yml) is now a dedicated Postgres instance for this service alone,
+  # so there's no other service's tables to namespace away from inside it. Flyway and Hibernate both
+  # fall back to Postgres' default search_path, which resolves to the "public" schema for a normal
+  # user - V1-V5 run against it exactly the same as they did against the old named schema, since none
+  # of them reference the schema name itself.
+
+  jpa:
+    # validate because we are using flyway
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        # PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect'
+        # (remove the property setting, and it will be selected by default)
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  kafka:
+    bootstrap-servers: localhost:9094
+    producer:
+       # StringSerializer to match OutboxEvent.aggregateId. StringSerializer, not JacksonJsonSerializer,
+       # for the value - OutboxRelay sends outbox_events.payload verbatim, and it's already a serialized
+       # JSON string via object mapper; running it through JacksonJsonSerializer again would wrap it in an extra pair of
+       # escaped quotes instead of sending the JSON object itself.
+       key-serializer: org.apache.kafka.common.serialization.StringSerializer
+       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+       # Deduplicates (means finding and removing extra copies of identical data)
+       # a retry the PRODUCER itself issues when a send's ack is lost in transit (the
+       # broker already wrote it, the client just never heard back and would otherwise resend) - a
+       # different, narrower problem than the outbox's own at-least-once duplicates (see OutboxRelay),
+       # which happen a full relay tick apart and this can't and doesn't deduplicate. kafka-clients 4.2.1
+       # (this project's resolved version) already defaults both of these to true/all since Kafka 3.0 -
+       # spelled out explicitly anyway rather than relying on an unstated library default for something
+       # correctness-relevant, same reasoning as pinning auto-offset-reset explicitly in usage-service.
+    properties:
+        enable:
+           idempotence: true
+        acks: all
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keycloak resource-server config - every request's JWT gets validated against this realm's JWKS
+          # (fetched once from <issuer-uri>/.well-known/openid-configuration and cached, not per-request).
+          # 8180, not Keycloak's own default 8080 - see the port comment in infra/docker-compose.yml.
+          issuer-uri: http://keycloak:8180/realms/energy-tracker
+
+server:
+  port: 8080
+
+# Only "health" is exposed over HTTP, spelled out explicitly rather than relying on Spring Boot's
+# own default staying what it is - /env, /beans etc. can leak configuration and must never be
+# public. DataSource (Postgres) health is wired in automatically because spring-boot-starter-data-jpa
+# and the postgresql driver are already on the classpath - no extra code needed for that part.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+app:
+  # outbox.relay.*: how often OutboxRelay polls outbox_events for unpublished rows, and how many
+  # it takes per tick - a bounded batch so a large backlog (e.g. after downtime) is drained
+  # gradually across several ticks instead of one long-running poll.
+  outbox:
+     relay:
+       interval-ms: 2000
+       batch-size: 50
+
+  security:
+    # Required for audience mapper
+    required-audience: user-service
+
+logging:
+  level:
+    # Log filter list of each filter chain at startup.
+    org.springframework.security: DEBUG

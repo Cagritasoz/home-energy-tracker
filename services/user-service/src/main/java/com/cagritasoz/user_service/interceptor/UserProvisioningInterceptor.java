@@ -27,6 +27,7 @@ public class UserProvisioningInterceptor implements HandlerInterceptor {
         // Execution up to this point guarantees that this check is always true.
         if(SecurityContextHolder.getContext().getAuthentication() instanceof JwtAuthenticationToken authToken) {
 
+            // TODO: Provisioning check for every single request could be a bottleneck.
             provisioningService.ensureUsable(authToken.getToken()); // Returns Jwt object.
 
             Jwt token = (Jwt) authToken.getPrincipal();
