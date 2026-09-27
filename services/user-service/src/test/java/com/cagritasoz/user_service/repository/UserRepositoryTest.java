@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // Layer 2: UserRepository against a real Postgres, single-threaded. What the SQL and the entity
-// mapping do to ONE row at a time. Two neighbours cover the rest and are not repeated here:
+// mapping do to ONE row at a time. Two neighbors cover the rest and are not repeated here:
 //   - UserSchemaTest: the table's own rules (constraints, defaults, trigger) in plain SQL;
 //   - UserRepositoryConcurrencyTest (to be written): what happens when threads race.
 //
@@ -90,10 +90,10 @@ class UserRepositoryTest {
 
         User user = UserFixtures.minimalUser().build();
 
-        userRepository.saveAndFlush(user);
-        entityManager.clear();
+        userRepository.saveAndFlush(user); // User is managed and is cached.
+        entityManager.clear(); // Clear the cache.
 
-        User loaded = userRepository.findById(user.getId()).orElseThrow();
+        User loaded = userRepository.findById(user.getId()).orElseThrow(); // findById hits the database. This is what we want.
 
         assertThat(loaded.getVersion()).isZero();
 
@@ -162,15 +162,16 @@ class UserRepositoryTest {
 
         UUID id = UUID.randomUUID();
 
+        // JDBC needed since hibernate can not insert created_at or updated_at columns (insertable = false, for both)
         jdbc.update("INSERT INTO users (id, email, display_name, created_at, updated_at) VALUES (?, ?, ?, ?::timestamptz, ?::timestamptz)",
                 id, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, YEAR_2000, YEAR_2000);
 
-        User user = userRepository.findById(id).orElseThrow();
+        User user = userRepository.findById(id).orElseThrow(); // No entity managed in the cache, findById hits the database.
 
         user.setDisplayName(UserFixtures.LEON_KENNEDY_NAME);
         user.setCreatedAt(Instant.parse("1990-01-01T00:00:00Z"));
 
-        userRepository.saveAndFlush(user);
+        userRepository.saveAndFlush(user); // Flush the changes to the database.
 
         // Claim 1: refreshed on the in-memory entity itself, before any clear(). @Generated in effect.
         assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000));

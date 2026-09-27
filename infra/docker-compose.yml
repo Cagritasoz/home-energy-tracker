@@ -110,7 +110,6 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
-      KAFKA_NUM_PARTITIONS: 1
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -124,6 +123,25 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s # For the first 30 seconds after container starts, don't treat failed healthchecks as evidence that the container is unhealthy.
+
+  # One-shot: creates every Kafka topic this project needs (currently just user.events.v1, see
+  # kafka/kafka-topics.sh) and then exits 0. Seeing it as "Exited (0)" in `docker compose ps` is
+  # expected, not a crash - it isn't meant to keep running like the other services here.
+  #
+  # Same image as the broker itself, so no extra image is pulled just for this. Its default
+  # entrypoint (/__cacert_entrypoint.sh) only does optional CA-cert setup we don't use here and
+  # then `exec`s whatever command it's given, so overriding just `command` (not `entrypoint`) is
+  # enough to run our script instead of starting a broker.
+  kafka-topics-init:
+    image: apache/kafka:4.3.1
+    container_name: kafka-topics-init
+    profiles: [ "kafka" ]
+    depends_on:
+      kafka-broker-controller-1:
+        condition: service_healthy # Topics can't be created before the broker is actually accepting connections.
+    volumes:
+      - ./kafka/kafka-topics.sh:/scripts/kafka-topics.sh:ro
+    command: [ "sh", "/scripts/kafka-topics.sh" ]
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0

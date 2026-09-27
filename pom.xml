@@ -103,6 +103,14 @@
 				<scope>import</scope>
 			</dependency>
 
+			<!-- Our own shared event contracts. Managed here so a service lists it without a version; every
+			     module shares the reactor's version, so they can never point at different ones. -->
+			<dependency>
+				<groupId>${project.groupId}</groupId>
+				<artifactId>contracts</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+
 		</dependencies>
 	</dependencyManagement>
 

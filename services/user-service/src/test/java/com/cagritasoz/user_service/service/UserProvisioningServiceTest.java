@@ -30,7 +30,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,6 +40,9 @@ public class UserProvisioningServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private OutboxService outboxService;
 
     @InjectMocks
     private UserProvisioningService provisioningService;
@@ -73,6 +78,7 @@ public class UserProvisioningServiceTest {
                 .isInstanceOf(AccountNotActiveException.class);
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
         verify(userRepository, never()).syncEmail(any(), any());
+        verifyNoInteractions(outboxService);
     }
 
     // The single "do write" case stays its own @Test rather than a row in the source above: it
@@ -80,16 +86,62 @@ public class UserProvisioningServiceTest {
     // outcomes into one parameterized method would need an if/else inside the test body -
     // conditional logic in a test is exactly where a wrong branch can silently pass.
     @Test
-    void ensureUsable_activeUser_verifiedChangedEmail_syncsEmail() {
+    void ensureUsable_activeUser_verifiedChangedEmail_syncsEmailAndRecordsUpdatedEvent() {
+
+        User user = UserFixtures.activeUser().id(USER_ID).build();
+        // What the table holds after the update: the new email and the version the UPDATE bumped.
+        User syncedUser = UserFixtures.activeUser().id(USER_ID).email(NEW_EMAIL).version(1L).build();
+        Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
+
+        // Two reads: ensureUsable's own, and the re-read after the update (syncEmail clears the
+        // persistence context, so the second one really returns the fresh row).
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user), Optional.of(syncedUser));
+
+        // 1 = this request changed the email, so it must announce it.
+        when(userRepository.syncEmail(USER_ID, NEW_EMAIL)).thenReturn(1);
+
+        provisioningService.ensureUsable(token);
+
+        verify(userRepository).syncEmail(USER_ID, NEW_EMAIL);
+
+        // The event is built from the re-read row, not from the stale user loaded at the start.
+        verify(outboxService).recordUserUpdated(syncedUser);
+    }
+
+    // syncEmail returned 0: nothing changed (a concurrent request synced the email first, or the account
+    // stopped being ACTIVE meanwhile). No event, and no pointless re-read of the row either -
+    // findById is called only once, by ensureUsable itself. The 0 is stubbed explicitly even though it is
+    // a mock's default, so the intent is visible.
+    @Test
+    void ensureUsable_activeUser_emailSyncChangedNothing_doesNotRecordEvent() {
 
         User user = UserFixtures.activeUser().id(USER_ID).build();
         Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
 
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+        when(userRepository.syncEmail(USER_ID, NEW_EMAIL)).thenReturn(0);
 
         provisioningService.ensureUsable(token);
 
         verify(userRepository).syncEmail(USER_ID, NEW_EMAIL);
+        verify(userRepository, times(1)).findById(USER_ID);
+        verifyNoInteractions(outboxService);
+    }
+
+    // The email was updated (1 row) but the re-read finds no row: should be impossible inside one
+    // transaction, so it is reported as an error rather than swallowed, and nothing is recorded.
+    @Test
+    void ensureUsable_activeUser_syncedUserMissingAfterUpdate_throwsIllegalState() {
+
+        User user = UserFixtures.activeUser().id(USER_ID).build();
+        Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
+
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user), Optional.empty());
+        when(userRepository.syncEmail(USER_ID, NEW_EMAIL)).thenReturn(1);
+
+        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
+                .isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(outboxService);
     }
 
     // Every way syncEmailIfChanged can decide "don't write". Unlike the status test above, the
@@ -140,6 +192,9 @@ public class UserProvisioningServiceTest {
         // never() + any(): "syncEmail was not called with ANY arguments" - stronger than checking
         // it wasn't called with one specific email.
         verify(userRepository, never()).syncEmail(any(), any());
+
+        // An existing user is not a new registration.
+        verifyNoInteractions(outboxService);
     }
 
     // The one case none of the tests above cover: an entirely new user, with valid claims,
@@ -160,6 +215,12 @@ public class UserProvisioningServiceTest {
         when(userRepository.findById(USER_ID))
                 .thenReturn(Optional.empty(), Optional.of(provisionedUser));
 
+        // 1 = this call actually inserted the row, i.e. it won any race and must record the event.
+        // An unstubbed mock returns 0, which the service reads as "the row already existed" - without
+        // this stub the test would silently exercise the lost-race path instead.
+        when(userRepository.insertIgnoringConflict(USER_ID, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
+                .thenReturn(1);
+
         provisioningService.ensureUsable(token);
 
         // Proves HOW the row came to exist, not just that ensureUsable didn't throw: the right
@@ -167,9 +228,34 @@ public class UserProvisioningServiceTest {
         // "name" claim, so resolveDisplayName never has to fall back to given_name/preferred_username here.
         verify(userRepository).insertIgnoringConflict(USER_ID, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
 
+        // The event is recorded with the user as LOADED back from the database (the second findById),
+        // not one built locally - so it carries the database's version and created_at.
+        verify(outboxService).recordUserRegistered(provisionedUser);
+
         // provisionedUser's email already matches the token's (both fixtures default to the same
         // address) - syncEmailIfChanged has nothing to change, so it must not write either.
         verify(userRepository, never()).syncEmail(any(), any());
+    }
+
+    // The request that LOSES the provisioning race: a concurrent request already created the row, so
+    // insertIgnoringConflict returns 0. This request still gets the user and carries on (no error),
+    // but must not record a second UserRegistered - exactly one event per user, from the winner.
+    // The 0 is stubbed explicitly even though it is a mock's default, so the intent is visible.
+    @Test
+    void ensureUsable_nonExistentUser_insertLostRace_doesNotRecordEvent() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        User winnersUser = UserFixtures.activeUser().id(USER_ID).build();
+
+        when(userRepository.findById(USER_ID))
+                .thenReturn(Optional.empty(), Optional.of(winnersUser));
+        when(userRepository.insertIgnoringConflict(USER_ID, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
+                .thenReturn(0);
+
+        provisioningService.ensureUsable(token);
+
+        verify(userRepository).insertIgnoringConflict(USER_ID, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
+        verifyNoInteractions(outboxService);
     }
 
     // resolveDisplayName is private - it's only reachable by actually going through provision()'s
@@ -227,6 +313,9 @@ public class UserProvisioningServiceTest {
         when(userRepository.findById(USER_ID))
                 .thenReturn(Optional.empty(), Optional.of(UserFixtures.activeUser().id(USER_ID).build()));
 
+        // These cases are about a user that really gets created (1 row inserted), not a lost race.
+        when(userRepository.insertIgnoringConflict(eq(USER_ID), eq(NEW_EMAIL), any())).thenReturn(1);
+
         provisioningService.ensureUsable(token);
 
         // The email is fixed (eq(NEW_EMAIL)) so this only varies, and only asserts on, the one
@@ -259,6 +348,7 @@ public class UserProvisioningServiceTest {
                 .hasMessage("display_name");
 
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
+        verifyNoInteractions(outboxService);
     }
 
     @Test
@@ -273,6 +363,7 @@ public class UserProvisioningServiceTest {
                 .hasMessage("email");
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
         verify(userRepository, never()).syncEmail(any(), any());
+        verifyNoInteractions(outboxService);
     }
 
     @Test
@@ -286,6 +377,7 @@ public class UserProvisioningServiceTest {
                 .isInstanceOf(EmailNotVerifiedException.class);
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
         verify(userRepository, never()).syncEmail(any(), any());
+        verifyNoInteractions(outboxService);
     }
 
     @Test
