@@ -2,7 +2,6 @@ package com.cagritasoz.user_service.service;
 
 import com.cagritasoz.contracts.EventEnvelope;
 import com.cagritasoz.contracts.user.*;
-import com.cagritasoz.user_service.aspect.SkipLogging;
 import com.cagritasoz.user_service.entity.OutboxEvent;
 import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.repository.OutboxRepository;
@@ -24,7 +23,6 @@ public class OutboxService {
 
     // This method MUST be called while a transaction is already active. If there is no transaction, Spring throws an exception.
     @Transactional(propagation = Propagation.MANDATORY)
-    @SkipLogging
     public void recordUserRegistered(User user) {
 
         // The event id is created here, once, and used for both the JSON and the row (see write()).
@@ -51,7 +49,6 @@ public class OutboxService {
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
-    @SkipLogging
     public void recordUserUpdated(User user) {
 
         EventEnvelope<UserUpdatedData> envelope = EventEnvelope.<UserUpdatedData>builder()
@@ -75,7 +72,6 @@ public class OutboxService {
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
-    @SkipLogging
     public void recordUserDeletionRequested(User user) {
 
         EventEnvelope<UserDeletionRequestedData> envelope = EventEnvelope.<UserDeletionRequestedData>builder()

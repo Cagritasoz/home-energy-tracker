@@ -85,8 +85,8 @@ public class OutboxEvent {
 
     // The whole event as a JSON object, held as the raw JSON text - the relay sends this string to
     // Kafka as-is. SqlTypes.JSON makes Hibernate bind it as jsonb rather than as text, which is what
-    // the column is. Excluded from toString: it carries the user's email and display name, and
-    // LoggingAspect logs entities it sees.
+    // the column is. Excluded from toString: it carries the user's email and display name, which
+    // must never end up in a log line.
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, updatable = false)
     @ToString.Exclude
