@@ -80,6 +80,9 @@
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 
+        <!-- No @Aspect classes remain (LoggingAspect/ExecutionTimeAspect were removed). Kept because
+             Resilience4j's @CircuitBreaker/@Retry annotations need it; Boot 4 no longer manages the
+             older spring-boot-starter-aop. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aspectj</artifactId>

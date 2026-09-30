@@ -6,10 +6,13 @@ import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -18,6 +21,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -102,10 +106,6 @@ class UserRepositoryTest {
         assertThat(loaded.getUpdatedAt()).isEqualTo(timestampOf("updated_at", loaded));
 
     }
-
-    // Rule for the native-query tests still to be written (see the TODO list at the bottom): they
-    // bypass Hibernate's cache, so verify through jdbc (or entityManager.clear() first) - never
-    // through a findById that may return the stale, cached entity.
 
     @Test
     void saveAndFlush_userBuiltWithoutOptionalFields_persistsBuilderDefaults() {
@@ -238,7 +238,7 @@ class UserRepositoryTest {
 
         userRepository.saveAndFlush(user);
 
-        assertThat(userRepository.existsById(user.getId())).isTrue();
+        assertThat(userRepository.existsById(user.getId())).isTrue(); // existsById does not use the cache, no entityManager.clear() needed.
         assertThat(userRepository.existsById(UUID.randomUUID())).isFalse();
 
     }
@@ -322,56 +322,398 @@ class UserRepositoryTest {
 
     }
 
-    // TODO saveAndFlush_deletedUserWithAllTimestamps_roundTripsEveryColumn
-    //      UserFixtures.deletedUser() saved and read back: status DELETED as a string, all four
-    //      nullable/audit Instants and devicesDeleted survive the trip (@Enumerated STRING mapping).
+    // Every column a DELETED account carries survives the trip through the table. version is
+    // cleared first: Spring Data treats an entity with a non-null @Version as existing and merges it
+    // instead of inserting it, and Hibernate refuses to merge a versioned row that is not there.
+    @Test
+    void saveAndFlush_deletedUserWithAllTimestamps_roundTripsEveryColumn() {
+
+        User user = UserFixtures.deletedUser().version(null).build();
+
+        userRepository.saveAndFlush(user);
+        entityManager.clear();
+
+        User loaded = userRepository.findById(user.getId()).orElseThrow();
+
+        assertThat(loaded.getEmail()).isEqualTo(user.getEmail());
+        assertThat(loaded.getDisplayName()).isEqualTo(user.getDisplayName());
+        assertThat(loaded.getTimezone()).isEqualTo(user.getTimezone());
+        assertThat(loaded.getStatus()).isEqualTo(UserStatus.DELETED);
+        assertThat(loaded.isDevicesDeleted()).isTrue();
+        assertThat(loaded.getKeycloakDisabledAt()).isEqualTo(user.getKeycloakDisabledAt());
+        assertThat(loaded.getDeletionRequestedAt()).isEqualTo(user.getDeletionRequestedAt());
+        assertThat(loaded.getDeletedAt()).isEqualTo(user.getDeletedAt());
+        assertThat(loaded.getVersion()).isZero();
+        assertThat(loaded.getCreatedAt()).isEqualTo(timestampOf("created_at", loaded));
+        assertThat(loaded.getUpdatedAt()).isEqualTo(timestampOf("updated_at", loaded));
+
+        String storedStatus = jdbc.queryForObject("SELECT status FROM users WHERE id = ?", String.class, user.getId());
+        assertThat(storedStatus).isEqualTo("DELETED");
+
+    }
 
     // --- insertIgnoringConflict (ON CONFLICT (id) DO NOTHING) - the just-in-time provisioning insert
-    // TODO insertIgnoringConflict_newId_insertsRowWithDefaults
-    //      status ACTIVE, timezone UTC, version 0, devices_deleted false, timestamps filled.
-    // TODO insertIgnoringConflict_existingId_leavesRowUntouched
-    //      Second call with the same id and DIFFERENT email/displayName: no exception, and the first
-    //      call's values are still there (nothing is overwritten).
-    // TODO insertIgnoringConflict_newIdWithEmailOfLiveUser_throwsDataIntegrityViolation
-    //      ON CONFLICT only covers the id. A different id with a live user's email still hits
-    //      uq_users_email and the exception propagates - this is what the handler maps to 409.
-    // TODO insertIgnoringConflict_newIdWithEmailOfDeletedUser_insertsRow
-    // TODO insertIgnoringConflict_emailWithoutAtSign_throwsDataIntegrityViolation   (chk_users_email)
 
-    // --- markDeleting (ACTIVE -> DELETING compare-and-set)
-    // TODO markDeleting_activeUser_returnsOneAndMovesToDeleting
-    //      Returns 1; status DELETING; deletion_requested_at set; version + 1; email, displayName
-    //      and the other columns unchanged; updated_at bumped by the trigger.
-    // TODO markDeleting_deletingUser_returnsZeroAndChangesNothing
-    //      Returns 0; deletion_requested_at is NOT re-stamped and version is NOT bumped again.
-    // TODO markDeleting_deletedUser_returnsZero
-    // TODO markDeleting_unknownId_returnsZero
-    // TODO markDeleting_thenHibernateUpdateOfStaleEntity_throwsOptimisticLockingFailure
-    //      Load the user, markDeleting through the native query, then saveAndFlush the stale loaded
-    //      copy: the native query already moved version to 1, so Hibernate's version check fails.
-    //      Deterministic, single-threaded version of "PATCH /me racing DELETE /me".
-    // TODO markDeleting_afterEntityWasLoaded_persistenceContextStillShowsOldStatus
-    //      Characterization test of the trap the rule above warns about: findById WITHOUT clear()
-    //      still says ACTIVE after markDeleting. Documents why callers must not trust an entity they
-    //      loaded before a native update. Worth checking against UserProvisioningService, which loads
-    //      the user and then calls syncEmail on it.
+    @Test
+    void insertIgnoringConflict_newId_insertsRowWithDefaults() {
 
-    // --- syncEmail (email compare-and-set, ACTIVE only)
-    // TODO syncEmail_activeUserWithDifferentEmail_updatesEmailAndBumpsVersion
-    //      Also updated_at bumped by the trigger.
-    // TODO syncEmail_sameEmail_changesNothing
-    //      version NOT bumped: the "AND email <> :email" guard is what keeps a no-op from writing.
-    // TODO syncEmail_sameEmailDifferentCase_updatesEmail
-    //      Characterization: "<>" is case-sensitive while uq_users_email compares lower(email), so a
-    //      change of case alone counts as a change. Pin down whichever behavior is intended.
-    // TODO syncEmail_deletingOrDeletedUser_changesNothing   (parameterized over the two statuses)
-    // TODO syncEmail_unknownId_changesNothingAndDoesNotThrow
-    // TODO syncEmail_emailOfAnotherLiveUser_throwsDataIntegrityViolation   (uq_users_email)
-    // TODO syncEmail_emailOfDeletedUser_updatesEmail
-    // TODO syncEmail_emailWithoutAtSign_throwsDataIntegrityViolation       (chk_users_email)
-    //      Also worth deciding: syncEmail returns void, so a caller can't tell whether anything
-    //      changed. Returning int like markDeleting would make these assertions direct. Production
-    //      change - raise it before touching it.
+        UUID id = UUID.randomUUID();
+
+        int inserted = userRepository.insertIgnoringConflict(id, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
+
+        User user = userRepository.findById(id).orElseThrow();
+
+        assertThat(inserted).isOne();
+        assertThat(user.getId()).isEqualTo(id);
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(user.getTimezone()).isEqualTo("UTC");
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.isDevicesDeleted()).isFalse();
+        assertThat(user.getKeycloakDisabledAt()).isNull();
+        assertThat(user.getDeletionRequestedAt()).isNull();
+        assertThat(user.getDeletedAt()).isNull();
+        assertThat(user.getCreatedAt()).isNotNull();
+        assertThat(user.getUpdatedAt()).isNotNull();
+
+    }
+
+    @Test
+    void insertIgnoringConflict_existingId_leavesRowUntouched() {
+
+        UUID id = UUID.randomUUID();
+
+        int firstCall = userRepository.insertIgnoringConflict(id, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
+
+        int secondCall = userRepository.insertIgnoringConflict(id, UserFixtures.LEON_KENNEDY_EMAIL, UserFixtures.LEON_KENNEDY_NAME);
+
+        User user = userRepository.findById(id).orElseThrow();
+
+        assertThat(firstCall).isOne();
+        assertThat(secondCall).isZero();
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(user.getVersion()).isZero();
+
+    }
+
+    @Test
+    void insertIgnoringConflict_newIdWithEmailOfLiveUser_throwsDataIntegrityViolation() {
+
+        UUID existingId = UUID.randomUUID();
+
+        jdbc.update("""
+                        INSERT INTO users
+                        (id, email, display_name)
+                        VALUES
+                        (?, ?, ?)
+                        """,
+                existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
+
+        UUID newId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> userRepository.insertIgnoringConflict(newId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("uq_users_email");
+
+    }
+
+    @Test
+    void insertIgnoringConflict_newIdWithEmailOfDeletedUser_insertsRow() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
+
+        UUID newId = UUID.randomUUID();
+
+        int inserted = userRepository.insertIgnoringConflict(newId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
+
+        User user = userRepository.findById(newId).orElseThrow();
+
+        assertThat(inserted).isOne();
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+
+    }
+
+    @Test
+    void insertIgnoringConflict_emailWithoutAtSign_throwsDataIntegrityViolation() {
+
+        UUID newId = UUID.randomUUID();
+        String invalidEmail = "example.com";
+
+        assertThatThrownBy(() -> userRepository.insertIgnoringConflict(newId, invalidEmail, UserFixtures.ARTHUR_MORGAN_NAME))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_users_email");
+
+    }
+
+    @Test
+    void markDeleting_activeUser_returnsOneAndMovesToDeleting() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        int marked = userRepository.markDeleting(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(marked).isOne();
+        assertThat(user.getId()).isEqualTo(existingId);
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(user.getTimezone()).isEqualTo("UTC");
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(user.getVersion()).isOne();
+        assertThat(user.isDevicesDeleted()).isFalse();
+        assertThat(user.getKeycloakDisabledAt()).isNull();
+        assertThat(user.getDeletionRequestedAt()).isAfter(Instant.parse(YEAR_2000));
+        assertThat(user.getDeletedAt()).isNull();
+        assertThat(user.getCreatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void markDeleting_deletingUser_returnsZeroAndChangesNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+
+        int marked = userRepository.markDeleting(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(marked).isZero();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getUpdatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void markDeleting_deletedUser_returnsZero() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
+
+        int marked = userRepository.markDeleting(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(marked).isZero();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETED);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getDeletedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void markDeleting_unknownId_returnsZero() {
+
+        assertThat(userRepository.markDeleting(UUID.randomUUID())).isZero();
+
+    }
+
+    @Test
+    void markDeleting_thenHibernateUpdateOfStaleEntity_throwsOptimisticLockingFailure() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        User staleUser = userRepository.findById(existingId).orElseThrow();
+
+        userRepository.markDeleting(existingId);
+
+        staleUser.setDisplayName(UserFixtures.LEON_KENNEDY_NAME);
+
+        assertThatThrownBy(() -> userRepository.saveAndFlush(staleUser))
+                .isInstanceOf(OptimisticLockingFailureException.class);
+
+        String storedName = jdbc.queryForObject("SELECT display_name FROM users WHERE id = ?", String.class, existingId);
+        assertThat(storedName).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+
+    }
+
+    @Test
+    void markDeleting_afterEntityWasLoaded_detachesItAndFindByIdRereadsTheRow() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        User loadedBefore = userRepository.findById(existingId).orElseThrow();
+
+        userRepository.markDeleting(existingId);
+
+        User loadedAfter = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(entityManager.contains(loadedBefore)).isFalse();
+        assertThat(loadedBefore.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(loadedBefore.getVersion()).isZero();
+        assertThat(loadedAfter).isNotSameAs(loadedBefore);
+        assertThat(loadedAfter.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(loadedAfter.getVersion()).isOne();
+
+    }
+
+    @Test
+    void syncEmail_activeUserWithDifferentEmail_updatesEmailAndBumpsVersion() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        int synced = userRepository.syncEmail(existingId, UserFixtures.LEON_KENNEDY_EMAIL);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(synced).isOne();
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.LEON_KENNEDY_EMAIL);
+        assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(user.getVersion()).isOne();
+        assertThat(user.getCreatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void syncEmail_sameEmail_changesNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        int synced = userRepository.syncEmail(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(synced).isZero();
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getUpdatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void syncEmail_sameEmailDifferentCase_updatesEmail() {
+
+        UUID existingId = UUID.randomUUID();
+        String upperCaseEmail = UserFixtures.ARTHUR_MORGAN_EMAIL.toUpperCase(Locale.ROOT);
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        int synced = userRepository.syncEmail(existingId, upperCaseEmail);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(synced).isOne();
+        assertThat(user.getEmail()).isEqualTo(upperCaseEmail);
+        assertThat(user.getVersion()).isOne();
+
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = UserStatus.class, names = {"DELETING", "DELETED"})
+    void syncEmail_deletingOrDeletedUser_changesNothing(UserStatus status) {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, status);
+
+        int synced = userRepository.syncEmail(existingId, UserFixtures.LEON_KENNEDY_EMAIL);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(synced).isZero();
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(user.getStatus()).isEqualTo(status);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getUpdatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void syncEmail_unknownId_changesNothingAndDoesNotThrow() {
+
+        UUID unknownId = UUID.randomUUID();
+
+        int synced = userRepository.syncEmail(unknownId, UserFixtures.ARTHUR_MORGAN_EMAIL);
+
+        assertThat(synced).isZero();
+        assertThat(userRepository.existsById(unknownId)).isFalse();
+
+    }
+
+    @Test
+    void syncEmail_emailOfAnotherLiveUser_throwsDataIntegrityViolation() {
+
+        UUID arthurId = UUID.randomUUID();
+        UUID leonId = UUID.randomUUID();
+
+        insertUser(arthurId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+        insertUser(leonId, UserFixtures.LEON_KENNEDY_EMAIL, UserFixtures.LEON_KENNEDY_NAME, UserStatus.ACTIVE);
+
+        assertThatThrownBy(() -> userRepository.syncEmail(leonId, UserFixtures.ARTHUR_MORGAN_EMAIL))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("uq_users_email");
+
+    }
+
+    @Test
+    void syncEmail_emailOfDeletedUser_updatesEmail() {
+
+        UUID arthurId = UUID.randomUUID();
+        UUID leonId = UUID.randomUUID();
+
+        insertUser(arthurId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
+        insertUser(leonId, UserFixtures.LEON_KENNEDY_EMAIL, UserFixtures.LEON_KENNEDY_NAME, UserStatus.ACTIVE);
+
+        int synced = userRepository.syncEmail(leonId, UserFixtures.ARTHUR_MORGAN_EMAIL);
+
+        User leon = userRepository.findById(leonId).orElseThrow();
+
+        assertThat(synced).isOne();
+        assertThat(leon.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(leon.getVersion()).isOne();
+
+    }
+
+    @Test
+    void syncEmail_emailWithoutAtSign_throwsDataIntegrityViolation() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        assertThatThrownBy(() -> userRepository.syncEmail(existingId, "example.com"))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_users_email");
+
+    }
+
+    private void insertUser(UUID id, String email, String displayName, UserStatus status) {
+
+        jdbc.update("""
+                        INSERT INTO users
+                        (id, email, display_name, status, deletion_requested_at, deleted_at, created_at, updated_at)
+                        VALUES
+                        (?, ?, ?, ?, ?::timestamptz, ?::timestamptz, ?::timestamptz, ?::timestamptz)
+                        """,
+                id, email, displayName, status.name(),
+                status == UserStatus.ACTIVE ? null : YEAR_2000,
+                status == UserStatus.DELETED ? YEAR_2000 : null,
+                YEAR_2000, YEAR_2000);
+
+    }
 
     // Read as an Instant so the comparison doesn't depend on the session's time zone or offset.
     private Instant timestampOf(String column, User user) {

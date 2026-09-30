@@ -1,6 +1,5 @@
 package com.cagritasoz.user_service.service;
 
-import com.cagritasoz.user_service.aspect.SkipLogging;
 import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.exception.AccountNotActiveException;
 import com.cagritasoz.user_service.exception.EmailNotVerifiedException;
@@ -24,7 +23,6 @@ public class UserProvisioningService {
     private final OutboxService outboxService;
 
     @Transactional
-    @SkipLogging
     // TODO: Evaluate whether it is worth it for other services to use the found/provisioned user without firing a separate "findById" query.
     public void ensureUsable(Jwt token) {
 
