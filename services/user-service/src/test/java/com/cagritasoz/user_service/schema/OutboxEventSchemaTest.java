@@ -10,9 +10,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.OffsetDateTime;
@@ -55,7 +55,8 @@ class OutboxEventSchemaTest {
     void seq_explicitValue_isRejected() {
 
         assertThatThrownBy(() -> insertEvent(Map.of("seq", 1L)))
-                .isInstanceOf(DataAccessException.class)
+                .isInstanceOf(BadSqlGrammarException.class)
+                .rootCause()
                 .hasMessageContaining("cannot insert a non-DEFAULT value into column \"seq\"");
 
     }
