@@ -1,7 +1,6 @@
 package com.cagritasoz.user_service.relay;
 
 import com.cagritasoz.contracts.EventHeaders;
-import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.entity.OutboxEvent;
 import com.cagritasoz.user_service.repository.OutboxRepository;
 import lombok.RequiredArgsConstructor;
@@ -109,7 +108,7 @@ public class OutboxRelay {
 
     private ProducerRecord<String, String> toRecord(OutboxEvent event) {
 
-        ProducerRecord<String, String> record = new ProducerRecord<>(UserEvents.TOPIC, event.getAggregateId(), event.getPayload());
+        ProducerRecord<String, String> record = new ProducerRecord<>(event.getTopic(), event.getAggregateId(), event.getPayload());
 
         record.headers()
                 .add(new RecordHeader(EventHeaders.EVENT_ID, event.getId().toString().getBytes(StandardCharsets.UTF_8)))

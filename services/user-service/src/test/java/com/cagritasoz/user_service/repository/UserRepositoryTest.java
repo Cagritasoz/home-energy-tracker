@@ -107,10 +107,6 @@ class UserRepositoryTest {
 
     }
 
-    // Rule for the native-query tests still to be written (see the TODO list at the bottom): they
-    // bypass Hibernate's cache, so verify through jdbc (or entityManager.clear() first) - never
-    // through a findById that may return the stale, cached entity.
-
     @Test
     void saveAndFlush_userBuiltWithoutOptionalFields_persistsBuilderDefaults() {
 
