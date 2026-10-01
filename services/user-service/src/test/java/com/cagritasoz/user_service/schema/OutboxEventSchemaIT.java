@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(PostgresTestContainerConfig.class)
-class OutboxEventSchemaTest {
+class OutboxEventSchemaIT {
 
     private static final Instant YEAR_2026 = Instant.parse("2026-01-01T00:00:00Z");
 

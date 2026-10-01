@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(PostgresTestContainerConfig.class)
-class ProcessedEventSchemaTest {
+class ProcessedEventSchemaIT {
 
     // Name of the handler.
     private static final String HANDLER = "user-devices-deleted";

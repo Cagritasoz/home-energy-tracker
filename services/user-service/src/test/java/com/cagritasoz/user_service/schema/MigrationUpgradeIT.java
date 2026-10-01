@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // then run the newer migrations over them. No Spring context - the shared test database is already at
 // the latest version, so this test drives Flyway itself, one fresh schema per test.
 @Testcontainers
-class MigrationUpgradeTest {
+class MigrationUpgradeIT {
 
     private static final String LAST_RELEASED_VERSION = "7";
 

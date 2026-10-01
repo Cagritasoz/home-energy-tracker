@@ -168,6 +168,22 @@
 				</plugin>
 			</plugins>
 		</pluginManagement>
+
+		<plugins>
+			<!-- Surefire needs no entry: Maven binds it to the "test" phase for every jar module by default.
+			     Failsafe is not bound by default. spring-boot-starter-parent already configures it (version,
+			     integration-test + verify goals, classesDirectory so it tests the plain classes rather than
+			     the repackaged Boot jar), so declaring it here is enough to switch it on for every module.
+
+			     The split: *Test classes (no Docker) run in "test" via Surefire; *IT classes (Testcontainers)
+			     run in "integration-test" via Failsafe, after "package". "./mvnw test" = fast unit tests only;
+			     "./mvnw verify" = both. Failsafe records failures and fails the build only in "verify", so
+			     anything started for the tests can still be stopped first. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+			</plugin>
+		</plugins>
 	</build>
 
 	<!-- A Maven profile is basically an optional configuration/build mode.

@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(PostgresTestContainerConfig.class)
-class OutboxRepositoryTest {
+class OutboxRepositoryIT {
 
     @Autowired
     private OutboxRepository outboxRepository;

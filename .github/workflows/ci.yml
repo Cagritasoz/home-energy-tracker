@@ -8,8 +8,7 @@ on:
 jobs:
   test:
     # Testcontainers needs a real Docker daemon - GitHub's Ubuntu runners already have one running,
-    # no extra setup step required (see CLAUDE.md's Testing strategy for why this matters once
-    # Layer 2 repository tests are added; today's test suite doesn't actually need it yet).
+    # no extra setup step required. Every *IT class starts its own containers through it.
     runs-on: ubuntu-latest
 
     steps:
@@ -24,22 +23,21 @@ jobs:
           # re-downloading every dependency on every push.
           cache: 'maven'
 
-      # Runs against the whole reactor from the root pom, matching how the project is built
-      # locally - not per-service yet. CLAUDE.md's Testing
-      # strategy describes a later per-service matrix job; that split is worth adding once more
-      # services have their own real test suites to isolate failures between.
-      # -Pe2e is never activated here, so the Testcontainers-ComposeContainer stub in e2e/ is
-      # skipped, same as a plain local `./mvnw test`.
+      # Runs against the whole reactor from the root pom, matching how the project is built locally.
+      # -Pe2e is never activated here, so the Testcontainers-ComposeContainer stub in e2e/ is skipped.
       #
-      # Every *ApplicationTests class is excluded for now: it's a full @SpringBootTest
-      # (contextLoads) that boots the real app, which for user-service means Flyway needs a live
-      # Postgres and Spring Security needs a reachable Keycloak issuer - neither exists in this
-      # job yet, so a plain `./mvnw test` fails here exactly like it does locally with no infra
-      # running (verified). Layer 1 unit tests (this job's actual coverage today, e.g.
-      # UserServiceTest) need none of that. Bring these back in once either a Postgres +
-      # Keycloak service container is added here, or they're rewritten as Testcontainers-backed
-      # Layer 2/3 tests per CLAUDE.md's Testing strategy.
-      - name: Build and test
+      # "verify" runs both test plugins in order: Surefire runs the *Test classes (unit tests, no Docker)
+      # in the "test" phase, then Failsafe runs the *IT classes (Testcontainers) in "integration-test",
+      # after "package". A failing unit test stops the build before any container starts; Failsafe
+      # reports its failures in "verify", after the containers are gone.
+      #
+      # -Dtest only filters Surefire (Failsafe's own filter is -Dit.test). It excludes every
+      # *ApplicationTests class: a full @SpringBootTest (contextLoads) that boots the real app and needs
+      # a live Postgres and a reachable Keycloak issuer, which this job does not provide.
+      # -Dtest REPLACES Surefire's default name patterns, so they are listed again: an exclusion alone
+      # ("!**/*ApplicationTests") would mean "every class but those" and Surefire would run the *IT
+      # classes too (seen: every integration test ran twice).
+      - name: Unit and integration tests
         run: >
-          ./mvnw --batch-mode --no-transfer-progress test
-          -Dtest='!**/*ApplicationTests' -Dsurefire.failIfNoSpecifiedTests=false
+          ./mvnw --batch-mode --no-transfer-progress verify
+          -Dtest='**/*Test,**/*Tests,!**/*ApplicationTests' -Dsurefire.failIfNoSpecifiedTests=false

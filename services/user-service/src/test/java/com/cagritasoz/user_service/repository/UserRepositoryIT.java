@@ -31,8 +31,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // Layer 2: UserRepository against a real Postgres, single-threaded. What the SQL and the entity
 // mapping do to ONE row at a time. Two neighbors cover the rest and are not repeated here:
-//   - UserSchemaTest: the table's own rules (constraints, defaults, trigger) in plain SQL;
-//   - UserRepositoryConcurrencyTest (to be written): what happens when threads race.
+//   - UserSchemaIT: the table's own rules (constraints, defaults, trigger) in plain SQL;
+//   - UserRepositoryConcurrencyIT (to be written): what happens when threads race.
 //
 // @DataJpaTest starts only the persistence part of the app (entities, repositories, DataSource,
 // Flyway, Hibernate) - no controllers, no security, so the Keycloak JwtDecoder is never created.
@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(PostgresTestContainerConfig.class)
-class UserRepositoryTest {
+class UserRepositoryIT {
 
     // Old, fixed instants for rows that must not share the transaction's CURRENT_TIMESTAMP.
     private static final String YEAR_2000 = "2000-01-01T00:00:00Z";
@@ -149,7 +149,7 @@ class UserRepositoryTest {
     // INSERT and UPDATE). Two separate claims, both checked here:
     //  1. after the flush, the entity Hibernate is holding already carries the database's new
     //     updated_at - no reload needed. That refresh is the part that belongs to this layer;
-    //     the trigger itself is proven in UserSchemaTest.
+    //     the trigger itself is proven in UserSchemaIT.
     //  2. the table agrees with it, and created_at was not touched. created_at is deliberately
     //     tampered with in Java before the save: saving back the value it already had could never
     //     fail, so it would prove nothing. With updatable = false the tampering must never reach

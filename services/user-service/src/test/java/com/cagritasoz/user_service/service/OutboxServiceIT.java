@@ -40,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ImportAutoConfiguration(JacksonAutoConfiguration.class)
 @Import({PostgresTestContainerConfig.class, OutboxService.class})
-class OutboxServiceIntegrationTest {
+class OutboxServiceIT {
 
     private static final String YEAR_2000 = "2000-01-01T00:00:00Z";
 
