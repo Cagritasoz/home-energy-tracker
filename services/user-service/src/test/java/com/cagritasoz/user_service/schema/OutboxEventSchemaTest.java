@@ -3,6 +3,7 @@ package com.cagritasoz.user_service.schema;
 import com.cagritasoz.contracts.user.UserEventType;
 import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.JdbcParameters;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -15,7 +16,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.OffsetDateTime;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Import(PostgresTestContainerConfig.class)
 class OutboxEventSchemaTest {
 
-    private static final OffsetDateTime YEAR_2026 = OffsetDateTime.parse("2026-01-01T00:00:00Z");
+    private static final Instant YEAR_2026 = Instant.parse("2026-01-01T00:00:00Z");
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -87,6 +88,7 @@ class OutboxEventSchemaTest {
                 .containsEntry("published_at", null)
                 .containsEntry("attempts", 0)
                 .containsEntry("last_error", null)
+                .containsEntry("parked", false)
                 .doesNotContainEntry("seq", null)
                 .doesNotContainEntry("created_at", null);
 
@@ -117,7 +119,7 @@ class OutboxEventSchemaTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"id", "aggregate_type", "aggregate_id", "event_type", "schema_version", "topic",
-            "payload", "occurred_at", "created_at", "attempts"})
+            "payload", "occurred_at", "created_at", "attempts", "parked"})
     void notNullColumns_explicitNull_isRejected(String column) {
 
         assertThatThrownBy(() -> insertEvent(Collections.singletonMap(column, null)))
@@ -202,11 +204,54 @@ class OutboxEventSchemaTest {
     }
 
     @Test
-    void idxOutboxEventsPending_isPartialOnUnpublishedRowsOrderedBySeq() { // Index definition check.
+    void chkOutboxEventsPayloadSize_justBelowLimit_isAccepted() {
+
+        assertThatCode(() -> insertEvent(Map.of("payload", jsonObjectOfTextLength(262_143))))
+                .doesNotThrowAnyException();
+
+    }
+
+    @Test
+    void chkOutboxEventsPayloadSize_atLimit_isRejected() {
+
+        assertThatThrownBy(() -> insertEvent(Map.of("payload", jsonObjectOfTextLength(262_144))))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_outbox_events_payload_size");
+
+    }
+
+    @Test
+    void chkOutboxEventsParkedUnpublished_parkedAndPending_isAccepted() {
+
+        assertThatCode(() -> insertEvent(Map.of("parked", true, "attempts", 1, "last_error", "RecordTooLargeException")))
+                .doesNotThrowAnyException();
+
+    }
+
+    @Test
+    void chkOutboxEventsParkedUnpublished_parkedAndPublished_isRejected() {
+
+        assertThatThrownBy(() -> insertEvent(Map.of("parked", true, "published_at", YEAR_2026)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_outbox_events_parked_unpublished");
+
+    }
+
+    @Test
+    void idxOutboxEventsPending_isPartialOnUnpublishedUnparkedRowsOrderedBySeq() { // Index definition check.
 
         assertThat(indexDefinition("idx_outbox_events_pending"))
                 .contains("(seq)")
-                .contains("WHERE (published_at IS NULL)");
+                .contains("WHERE ((published_at IS NULL) AND (NOT parked))");
+
+    }
+
+    @Test
+    void idxOutboxEventsParked_isPartialOnParkedRowsOrderedBySeq() {
+
+        assertThat(indexDefinition("idx_outbox_events_parked"))
+                .contains("(seq)")
+                .contains("WHERE parked");
 
     }
 
@@ -236,9 +281,16 @@ class OutboxEventSchemaTest {
                 .map(column -> column.equals("payload") ? "?::jsonb" : "?")
                 .collect(Collectors.joining(", "));
 
-        jdbc.update("INSERT INTO outbox_events (" + columns + ") VALUES (" + placeholders + ")", row.values().toArray());
+        jdbc.update("INSERT INTO outbox_events (" + columns + ") VALUES (" + placeholders + ")", JdbcParameters.bindable(row.values().toArray()));
 
         return (UUID) row.get("id");
+
+    }
+
+    // {"p": "xxx..."} is 9 characters plus the padding, and jsonb renders it back in the same shape.
+    private static String jsonObjectOfTextLength(int length) {
+
+        return "{\"p\": \"" + "x".repeat(length - 9) + "\"}";
 
     }
 

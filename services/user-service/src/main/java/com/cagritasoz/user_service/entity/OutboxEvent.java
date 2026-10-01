@@ -119,4 +119,9 @@ public class OutboxEvent {
 
     @Column(name = "last_error")
     private String lastError;
+
+    // True = set aside by the relay because it can never be published; skipped until un-parked (V8).
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean parked = false;
 }

@@ -48,7 +48,7 @@ public class OutboxRelay {
             return;
         }
 
-        List<OutboxEvent> events = outboxRepository.findByPublishedAtIsNullOrderBySeqAsc(PageRequest.of(0, batchSize));
+        List<OutboxEvent> events = outboxRepository.findByPublishedAtIsNullAndParkedFalseOrderBySeqAsc(PageRequest.of(0, batchSize));
 
         // Phase 1: hand every record to the producer before waiting for any of them.
         List<CompletableFuture<SendResult<String, String>>> futures = new ArrayList<>(events.size());

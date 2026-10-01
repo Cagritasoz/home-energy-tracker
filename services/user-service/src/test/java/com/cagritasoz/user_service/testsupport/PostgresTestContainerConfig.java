@@ -20,7 +20,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 public class PostgresTestContainerConfig {
 
     // Same major version as infra/docker-compose.yml, so tests run against what production runs.
-    private static final String POSTGRES_IMAGE = "postgres:16-alpine";
+    public static final String POSTGRES_IMAGE = "postgres:16-alpine";
 
     // The container lives in Spring's context, and Spring caches contexts between test classes that
     // share the same configuration - so one container is started for the whole test run, not one per

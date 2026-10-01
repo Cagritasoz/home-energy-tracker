@@ -15,7 +15,9 @@ import java.util.List;
 public interface OutboxRepository extends JpaRepository<OutboxEvent, Long> {
 
     // ORDER BY seq ASC = oldest first.
-    List<OutboxEvent> findByPublishedAtIsNullOrderBySeqAsc(Pageable pageable);
+    // Parked rows are skipped. The condition matches the partial idx_outbox_events_pending
+    // (published_at IS NULL AND NOT parked), which is what lets Postgres use it.
+    List<OutboxEvent> findByPublishedAtIsNullAndParkedFalseOrderBySeqAsc(Pageable pageable);
 
     @Query(value = "SELECT pg_try_advisory_xact_lock(:key)", nativeQuery = true)
     boolean advisoryLockAcquired(@Param("key") long key);

@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.schema;
 
 import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.JdbcParameters;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -14,7 +15,6 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -84,6 +84,7 @@ class UserSchemaTest {
                 .containsEntry("keycloak_disabled_at", null)
                 .containsEntry("deletion_requested_at", null)
                 .containsEntry("deleted_at", null)
+                .containsEntry("keycloak_deleted_at", null)
                 .doesNotContainEntry("created_at", null)
                 .doesNotContainEntry("updated_at", null);
 
@@ -204,6 +205,72 @@ class UserSchemaTest {
 
     }
 
+    // V9: chk_users_deleting_consistency is: CHECK ((status = 'ACTIVE') = (deletion_requested_at IS NULL)).
+    // Accepted side: chkUsersStatus_allThreeLegalStatuses_areAccepted above inserts all three statuses
+    // with the matching deletion_requested_at.
+    @Test
+    void chkUsersDeletingConsistency_activeWithDeletionRequestedAt_isRejected() {
+
+        assertThatThrownBy(() -> insertUserWith(Map.of("status", "ACTIVE", "deletion_requested_at", YEAR_2026)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_users_deleting_consistency");
+
+    }
+
+    @Test
+    void chkUsersDeletingConsistency_deletingWithoutDeletionRequestedAt_isRejected() {
+
+        assertThatThrownBy(() -> insertUserWith(Map.of("status", "DELETING")))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_users_deleting_consistency");
+
+    }
+
+    @Test
+    void chkUsersKeycloakDisabledNotActive_deletingWithKeycloakDisabledAt_isAccepted() {
+
+        assertThatCode(() -> insertUserWith(Map.of(
+                "status", "DELETING", "deletion_requested_at", YEAR_2026, "keycloak_disabled_at", YEAR_2026)))
+                .doesNotThrowAnyException();
+
+    }
+
+    @Test
+    void chkUsersKeycloakDisabledNotActive_activeWithKeycloakDisabledAt_isRejected() {
+
+        assertThatThrownBy(() -> insertUserWith(Map.of("status", "ACTIVE", "keycloak_disabled_at", YEAR_2026)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_users_keycloak_disabled_not_active");
+
+    }
+
+    @Test
+    void chkUsersKeycloakDeletedOnlyDeleted_deletedWithKeycloakDeletedAt_isAccepted() {
+
+        assertThatCode(() -> insertUserWith(Map.of(
+                "status", "DELETED", "deletion_requested_at", YEAR_2026, "deleted_at", YEAR_2026,
+                "keycloak_disabled_at", YEAR_2026, "keycloak_deleted_at", YEAR_2026)))
+                .doesNotThrowAnyException();
+
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ACTIVE", "DELETING"})
+    void chkUsersKeycloakDeletedOnlyDeleted_notDeletedWithKeycloakDeletedAt_isRejected(String status) {
+
+        Map<String, Object> columns = new LinkedHashMap<>();
+        columns.put("status", status);
+        columns.put("keycloak_deleted_at", YEAR_2026);
+        if (!status.equals("ACTIVE")) {
+            columns.put("deletion_requested_at", YEAR_2026);
+        }
+
+        assertThatThrownBy(() -> insertUserWith(columns))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_users_keycloak_deleted_only_deleted");
+
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Unique index
     // ---------------------------------------------------------------------------------------------
@@ -271,6 +338,8 @@ class UserSchemaTest {
     // never be observed - the test would fail even with a perfectly working trigger.
     private static final String YEAR_2000 = "2000-01-01T00:00:00Z";
 
+    private static final Instant YEAR_2026 = Instant.parse("2026-01-01T00:00:00Z");
+
     // BEFORE UPDATE trigger: updated_at is stamped on every UPDATE, and the trigger touches nothing
     // else. version in particular is left alone on purpose - Hibernate's @Version (or an explicit
     // version + 1 in a native update) owns it - and created_at must never move.
@@ -306,13 +375,13 @@ class UserSchemaTest {
     // Helpers
     // ---------------------------------------------------------------------------------------------
 
-    // For the tests that need to control status directly, including illegal values. Sets no
-    // timestamps, so a legal row only results for statuses that don't need one (not DELETED) - the
+    // For the tests that need to control status directly, including illegal values. Any non-ACTIVE
+    // status gets a deletion_requested_at (chk_users_deleting_consistency), but never a deleted_at - the
     // tests that pass DELETED here do it on purpose, to provoke chk_users_deleted_consistency.
     private void insertUserWithStatus(UUID id, String email, String displayName, String status) {
 
-        jdbc.update("INSERT INTO users (id, email, display_name, status) VALUES (?, ?, ?, ?)",
-                id, email, displayName, status);
+        jdbc.update("INSERT INTO users (id, email, display_name, status, deletion_requested_at) VALUES (?, ?, ?, ?, ?)",
+                JdbcParameters.bindable(id, email, displayName, status, status.equals("ACTIVE") ? null : YEAR_2026));
 
     }
 
@@ -334,7 +403,7 @@ class UserSchemaTest {
 
     private void insertDeletedUser(UUID id, String email, String displayName) {
 
-        jdbc.update("INSERT INTO users (id, email, display_name, status, deleted_at) VALUES (?, ?, ?, 'DELETED', CURRENT_TIMESTAMP)",
+        jdbc.update("INSERT INTO users (id, email, display_name, status, deletion_requested_at, deleted_at) VALUES (?, ?, ?, 'DELETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 id, email, displayName);
 
     }
@@ -342,8 +411,24 @@ class UserSchemaTest {
     // A deleted_at on any status - used to build the "not DELETED but has a deleted_at" combination.
     private void insertUserWithStatusAndDeletedAt(UUID id, String email, String displayName, String status) {
 
-        jdbc.update("INSERT INTO users (id, email, display_name, status, deleted_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                id, email, displayName, status);
+        jdbc.update("INSERT INTO users (id, email, display_name, status, deletion_requested_at, deleted_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                JdbcParameters.bindable(id, email, displayName, status, status.equals("ACTIVE") ? null : YEAR_2026));
+
+    }
+
+    // Arthur Morgan's row with the given columns added or overridden; everything else from the defaults.
+    private void insertUserWith(Map<String, ?> columns) {
+
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("id", UUID.randomUUID());
+        values.put("email", UserFixtures.ARTHUR_MORGAN_EMAIL);
+        values.put("display_name", UserFixtures.ARTHUR_MORGAN_NAME);
+        values.putAll(columns);
+
+        String placeholders = String.join(", ", Collections.nCopies(values.size(), "?"));
+
+        jdbc.update("INSERT INTO users (" + String.join(", ", values.keySet()) + ") VALUES (" + placeholders + ")",
+                JdbcParameters.bindable(values.values().toArray()));
 
     }
 
@@ -359,15 +444,15 @@ class UserSchemaTest {
         values.put("status", "ACTIVE");
         values.put("version", 0L);
         values.put("devices_deleted", false);
-        values.put("created_at", OffsetDateTime.now());
-        values.put("updated_at", OffsetDateTime.now());
+        values.put("created_at", Instant.now());
+        values.put("updated_at", Instant.now());
 
         values.put(nullColumn, null);
 
         String columns = String.join(", ", values.keySet());
         String placeholders = String.join(", ", Collections.nCopies(values.size(), "?"));
 
-        jdbc.update("INSERT INTO users (" + columns + ") VALUES (" + placeholders + ")", values.values().toArray());
+        jdbc.update("INSERT INTO users (" + columns + ") VALUES (" + placeholders + ")", JdbcParameters.bindable(values.values().toArray()));
 
     }
 
