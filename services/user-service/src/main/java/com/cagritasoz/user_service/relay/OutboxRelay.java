@@ -3,7 +3,6 @@ package com.cagritasoz.user_service.relay;
 import com.cagritasoz.contracts.EventHeaders;
 import com.cagritasoz.user_service.entity.OutboxEvent;
 import com.cagritasoz.user_service.repository.OutboxRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -25,20 +24,27 @@ import java.util.concurrent.TimeoutException;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class OutboxRelay {
 
     private final OutboxRepository outboxRepository;
 
     private final KafkaTemplate<String, String> kafkaTemplate;
 
-    @Value("${app.outbox.relay.batch-size}")
-    private int batchSize;
+    private final int batchSize;
 
     // One deadline for the whole batch, not per record: how long the relay waits for all acks while
     // it holds the advisory lock and a database connection.
-    @Value("${app.outbox.relay.send-timeout-ms}")
-    private long sendTimeoutMs;
+    private final long sendTimeoutMs;
+
+    public OutboxRelay(OutboxRepository outboxRepository,
+                       KafkaTemplate<String, String> kafkaTemplate,
+                       @Value("${app.outbox.relay.batch-size}") int batchSize,
+                       @Value("${app.outbox.relay.send-timeout-ms}") long sendTimeoutMs) {
+        this.outboxRepository = outboxRepository;
+        this.kafkaTemplate = kafkaTemplate;
+        this.batchSize = batchSize;
+        this.sendTimeoutMs = sendTimeoutMs;
+    }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay.interval-ms}")
     @Transactional

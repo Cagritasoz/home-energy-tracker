@@ -39,4 +39,5 @@ public interface OutboxRepository extends JpaRepository<OutboxEvent, Long> {
             WHERE seq = :seq
             """, nativeQuery = true)
     void recordError(@Param("error") String error, @Param("seq") Long seq);
+
 }
