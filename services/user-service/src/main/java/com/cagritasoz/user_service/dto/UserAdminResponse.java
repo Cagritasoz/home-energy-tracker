@@ -8,11 +8,11 @@ import java.time.Instant;
 import java.util.UUID;
 
 // Admin view: every column of the users table, including the deletion-saga bookkeeping (status,
-// devicesDeleted, keycloakDisabledAt, deletionRequestedAt, deletedAt) an admin needs to see why a
+// devicesDeleted, keycloakDisabledAt, deletionRequestedAt, deletedAt, keycloakDeletedAt) an admin needs to see why a
 // deletion is stuck. Same explicit ordering rationale as UserResponse.
 @Builder
 @JsonPropertyOrder({"id", "email", "displayName", "timezone", "status", "version", "devicesDeleted",
-        "keycloakDisabledAt", "deletionRequestedAt", "deletedAt", "createdAt", "updatedAt"})
+        "keycloakDisabledAt", "deletionRequestedAt", "deletedAt", "keycloakDeletedAt", "createdAt", "updatedAt"})
 public record UserAdminResponse(
 
         UUID id,
@@ -34,6 +34,8 @@ public record UserAdminResponse(
         Instant deletionRequestedAt,
 
         Instant deletedAt,
+
+        Instant keycloakDeletedAt,
 
         Instant createdAt,
 

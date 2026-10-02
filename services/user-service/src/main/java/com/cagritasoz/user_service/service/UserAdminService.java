@@ -54,6 +54,7 @@ public class UserAdminService {
                 .keycloakDisabledAt(user.getKeycloakDisabledAt())
                 .deletionRequestedAt(user.getDeletionRequestedAt())
                 .deletedAt(user.getDeletedAt())
+                .keycloakDeletedAt(user.getKeycloakDeletedAt())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
                 .build();

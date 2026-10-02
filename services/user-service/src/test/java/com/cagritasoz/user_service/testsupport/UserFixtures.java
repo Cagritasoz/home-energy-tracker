@@ -64,6 +64,7 @@ public final class UserFixtures {
                 .keycloakDisabledAt(Instant.parse("2026-02-01T00:00:00Z"))
                 .deletionRequestedAt(Instant.parse("2026-01-31T23:58:42Z"))
                 .deletedAt(Instant.parse("2026-02-01T00:00:05Z"))
-                .updatedAt(Instant.parse("2026-02-01T00:00:05Z"));
+                .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:09Z"))
+                .updatedAt(Instant.parse("2026-02-01T00:00:09Z"));
     }
 }

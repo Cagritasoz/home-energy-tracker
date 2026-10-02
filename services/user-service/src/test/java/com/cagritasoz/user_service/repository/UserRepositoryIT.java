@@ -343,6 +343,7 @@ class UserRepositoryIT {
         assertThat(loaded.getKeycloakDisabledAt()).isEqualTo(user.getKeycloakDisabledAt());
         assertThat(loaded.getDeletionRequestedAt()).isEqualTo(user.getDeletionRequestedAt());
         assertThat(loaded.getDeletedAt()).isEqualTo(user.getDeletedAt());
+        assertThat(loaded.getKeycloakDeletedAt()).isEqualTo(user.getKeycloakDeletedAt());
         assertThat(loaded.getVersion()).isZero();
         assertThat(loaded.getCreatedAt()).isEqualTo(timestampOf("created_at", loaded));
         assertThat(loaded.getUpdatedAt()).isEqualTo(timestampOf("updated_at", loaded));
@@ -374,6 +375,7 @@ class UserRepositoryIT {
         assertThat(user.getKeycloakDisabledAt()).isNull();
         assertThat(user.getDeletionRequestedAt()).isNull();
         assertThat(user.getDeletedAt()).isNull();
+        assertThat(user.getKeycloakDeletedAt()).isNull();
         assertThat(user.getCreatedAt()).isNotNull();
         assertThat(user.getUpdatedAt()).isNotNull();
 
@@ -471,6 +473,7 @@ class UserRepositoryIT {
         assertThat(user.getKeycloakDisabledAt()).isNull();
         assertThat(user.getDeletionRequestedAt()).isAfter(Instant.parse(YEAR_2000));
         assertThat(user.getDeletedAt()).isNull();
+        assertThat(user.getKeycloakDeletedAt()).isNull();
         assertThat(user.getCreatedAt()).isEqualTo(Instant.parse(YEAR_2000));
         assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000));
 

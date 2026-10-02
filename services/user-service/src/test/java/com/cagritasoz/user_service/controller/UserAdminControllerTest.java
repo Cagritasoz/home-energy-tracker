@@ -72,7 +72,7 @@ public class UserAdminControllerTest {
     }
 
     // The same person as above, but in the DELETED state, so every deletion-saga column carries a
-    // real value - what the getUser test needs to prove all twelve admin fields are exposed.
+    // real value - what the getUser test needs to prove all thirteen admin fields are exposed.
     private UserAdminResponse deletedUserAdminResponse() {
         return UserAdminResponse.builder()
                 .id(USER_ID)
@@ -85,8 +85,9 @@ public class UserAdminControllerTest {
                 .keycloakDisabledAt(Instant.parse("2026-02-01T00:00:00Z"))
                 .deletionRequestedAt(Instant.parse("2026-01-31T23:58:42Z"))
                 .deletedAt(Instant.parse("2026-02-01T00:00:05Z"))
+                .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:09Z"))
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
-                .updatedAt(Instant.parse("2026-02-01T00:00:05Z"))
+                .updatedAt(Instant.parse("2026-02-01T00:00:09Z"))
                 .build();
     }
 
@@ -107,6 +108,7 @@ public class UserAdminControllerTest {
                 .andExpect(jsonPath("$.content[0].id").value(USER_ID.toString()))
                 // A null column must still appear in the JSON as an explicit null, not be left out.
                 .andExpect(jsonPath("$.content[0].keycloakDisabledAt").value((Object) null))
+                .andExpect(jsonPath("$.content[0].keycloakDeletedAt").value((Object) null))
                 .andExpect(jsonPath("$.page.size").value(20))
                 .andExpect(jsonPath("$.page.number").value(0))
                 .andExpect(jsonPath("$.page.totalElements").value(1))
@@ -193,7 +195,7 @@ public class UserAdminControllerTest {
 
     // Uses the DELETED variant so every column has a value. This is the admin view: unlike the
     // self-service response it exposes the whole deletion-saga state (status, version,
-    // devicesDeleted and the three saga timestamps), and Instants come out as ISO-8601 strings.
+    // devicesDeleted and the four saga timestamps), and Instants come out as ISO-8601 strings.
     @Test
     void getUser_existingId_returnsAllAdminFields() throws Exception {
 
@@ -211,8 +213,9 @@ public class UserAdminControllerTest {
                 .andExpect(jsonPath("$.keycloakDisabledAt").value("2026-02-01T00:00:00Z"))
                 .andExpect(jsonPath("$.deletionRequestedAt").value("2026-01-31T23:58:42Z"))
                 .andExpect(jsonPath("$.deletedAt").value("2026-02-01T00:00:05Z"))
+                .andExpect(jsonPath("$.keycloakDeletedAt").value("2026-02-01T00:00:09Z"))
                 .andExpect(jsonPath("$.createdAt").value("2026-01-01T00:00:00Z"))
-                .andExpect(jsonPath("$.updatedAt").value("2026-02-01T00:00:05Z"));
+                .andExpect(jsonPath("$.updatedAt").value("2026-02-01T00:00:09Z"));
 
         // The id in the URL is what reaches the service.
         verify(userAdminService).getUser(USER_ID);
