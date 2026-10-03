@@ -86,6 +86,16 @@ app:
        batch-size: 50
        # One deadline for all acks of a batch (the relay holds the advisory lock and a DB connection meanwhile).
        send-timeout-ms: 5000
+       max-batches-per-tick: 10
+       circuit-breaker:
+         window-size: 5
+         failure-rate-threshold: 100
+         wait-in-open-state-ms: 30000
+         half-open-calls: 1
+     purge:
+       retention-days: 7
+       batch-size: 1000
+       cron: "0 0 3 * * *"
 
   security:
     # Required for audience mapper

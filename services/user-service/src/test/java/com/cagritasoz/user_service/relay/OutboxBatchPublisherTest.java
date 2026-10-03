@@ -30,7 +30,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class OutboxRelayTest {
+class OutboxBatchPublisherTest {
 
     @Mock
     private OutboxRepository outboxRepository;
@@ -38,12 +38,12 @@ class OutboxRelayTest {
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
 
-    private OutboxRelay outboxRelay;
+    private OutboxBatchPublisher outboxBatchPublisher;
 
     @BeforeEach
     void setUp() {
 
-        outboxRelay = new OutboxRelay(outboxRepository, kafkaTemplate, 50, 5_000);
+        outboxBatchPublisher = new OutboxBatchPublisher(outboxRepository, kafkaTemplate, 50, 5_000);
 
     }
 
@@ -55,15 +55,12 @@ class OutboxRelayTest {
                 .thenReturn(List.of(event(1L), event(2L), event(3L), event(4L), event(5L)));
         when(kafkaTemplate.send(anyRecord())).thenReturn(acked(), acked(), timedOut(), acked(), acked());
 
-        outboxRelay.relay();
+        outboxBatchPublisher.publishBatch();
 
         InOrder inOrder = inOrder(outboxRepository);
-        inOrder.verify(outboxRepository).markPublished(1L);
-        inOrder.verify(outboxRepository).markPublished(2L);
         inOrder.verify(outboxRepository).recordError(contains("TimeoutException"), eq(3L));
-        verify(outboxRepository, never()).markPublished(3L);
-        verify(outboxRepository, never()).markPublished(4L);
-        verify(outboxRepository, never()).markPublished(5L);
+        inOrder.verify(outboxRepository).markPublished(List.of(1L, 2L));
+        verify(outboxRepository, never()).markPublished(List.of(1L, 2L, 3L, 4L, 5L));
 
     }
 

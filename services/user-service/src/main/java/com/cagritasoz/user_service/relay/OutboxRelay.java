@@ -1,126 +1,98 @@
 package com.cagritasoz.user_service.relay;
 
-import com.cagritasoz.contracts.EventHeaders;
-import com.cagritasoz.user_service.entity.OutboxEvent;
-import com.cagritasoz.user_service.repository.OutboxRepository;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
-@Slf4j
 @Component
 public class OutboxRelay {
 
-    private final OutboxRepository outboxRepository;
+    private final OutboxBatchPublisher batchPublisher;
 
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final CircuitBreaker circuitBreaker;
 
-    private final int batchSize;
+    private final int maxBatchesPerTick;
 
-    // One deadline for the whole batch, not per record: how long the relay waits for all acks while
-    // it holds the advisory lock and a database connection.
-    private final long sendTimeoutMs;
+    private final Counter publishedCounter;
 
-    public OutboxRelay(OutboxRepository outboxRepository,
-                       KafkaTemplate<String, String> kafkaTemplate,
-                       @Value("${app.outbox.relay.batch-size}") int batchSize,
-                       @Value("${app.outbox.relay.send-timeout-ms}") long sendTimeoutMs) {
-        this.outboxRepository = outboxRepository;
-        this.kafkaTemplate = kafkaTemplate;
-        this.batchSize = batchSize;
-        this.sendTimeoutMs = sendTimeoutMs;
+    private final Counter failedCounter;
+
+    public OutboxRelay(OutboxBatchPublisher batchPublisher,
+                       // Qualifier because there might exist two CircuitBreaker beans.
+                       @Qualifier("relayProducerCircuitBreaker") CircuitBreaker circuitBreaker,
+                       MeterRegistry meterRegistry,
+                       @Value("${app.outbox.relay.max-batches-per-tick}") int maxBatchesPerTick) {
+        this.batchPublisher = batchPublisher;
+        this.circuitBreaker = circuitBreaker;
+        this.maxBatchesPerTick = maxBatchesPerTick;
+        this.publishedCounter = meterRegistry.counter("outbox.publish", "result", "success");
+        this.failedCounter = meterRegistry.counter("outbox.publish", "result", "failure");
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay.interval-ms}")
-    @Transactional
     public void relay() {
 
-        if(!outboxRepository.advisoryLockAcquired(7_777_777L)) {
-            return;
-        }
+        for (int batch = 0; batch < maxBatchesPerTick; batch++) {
 
-        List<OutboxEvent> events = outboxRepository.findByPublishedAtIsNullAndParkedFalseOrderBySeqAsc(PageRequest.of(0, batchSize));
+            // tryAcquirePermission() means "Am I allowed to make a call?"
+            // Return false for OPEN state, true for CLOSED and HALF_OPEN states.
+            // In HALF_OPEN state tryAcquirePermission() probes with only one call. (One call is a property of the config).
+            if (!circuitBreaker.tryAcquirePermission()) {
+                return;
+            }
 
-        // Phase 1: hand every record to the producer before waiting for any of them.
-        List<CompletableFuture<SendResult<String, String>>> futures = new ArrayList<>(events.size());
-
-        for (OutboxEvent event : events) {
+            BatchResult result;
+            long start = System.nanoTime();
 
             try {
-                // send() doesn't wait for the network: the scheduled thread serializes the key and value and
-                // appends the record to the producer's accumulator, into the batch for its partition (chosen from
-                // the key, so one user's events always share a partition), then returns at once. A separate
-                // sender thread ships ready batches to the broker - typically this whole loop in one or two requests.
-                // Records to the same partition keep this send() order (idempotent producer).
-                futures.add(kafkaTemplate.send(toRecord(event)));
+                // publishBatch() is the call whose outcome we are reporting to the circuit breaker via the switch(result.outcome()) below.
+                result = batchPublisher.publishBatch();
             }
-            catch (RuntimeException e) {
-                // send() itself can throw (e.g. no topic metadata within max.block.ms). Nothing after this row is
-                // sent: it would only be marked unpublished and sent again anyway, behind this row.
-                futures.add(CompletableFuture.failedFuture(e));
-                break;
+
+            // TODO: Should DB outages be handled?
+            catch (RuntimeException e) { // Handles database thrown exceptions.
+
+                // "I acquired permission, but I did not actually make a call, so don't count this as success or failure."
+                circuitBreaker.releasePermission();
+
+                // Exception reaches Spring's scheduler.
+                // Spring logs Unexpected error occurred in scheduled task at ERROR with the stack trace and keeps the schedule alive.
+                // The next tick runs after fixedDelay, db outage cases, a lot of noise is to be expected.
+                throw e;
+            }
+
+            long elapsed = System.nanoTime() - start;
+            publishedCounter.increment(result.published());
+
+            switch (result.outcome()) {
+                case IDLE, INTERRUPTED -> {
+                    circuitBreaker.releasePermission();
+                    return;
+                }
+                case FAILED -> {
+                    failedCounter.increment();
+
+                    // onError() -> "The protected call failed. It took this long, and this is the exception responsible for the failure."
+                    // The breaker records the error outcome in its sliding window.
+                    circuitBreaker.onError(elapsed, TimeUnit.NANOSECONDS, result.failure());
+                    return;
+                }
+                case PUBLISHED -> {
+
+                    // onSuccess() means "The protected call completed successfully, and it took this long".
+                    // The breaker records the success outcome in its sliding window.
+                    circuitBreaker.onSuccess(elapsed, TimeUnit.NANOSECONDS);
+                    if (!result.full()) {
+                        return; // No more batches to send, break the loop.
+                    }
+                }
             }
         }
-
-        // Phase 2: collect the outcomes in seq order and mark the published prefix.
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(sendTimeoutMs);
-
-        for (int i = 0; i < futures.size(); i++) {
-
-            OutboxEvent event = events.get(i);
-
-            try {
-                // The scheduled thread blocks here until the broker has acknowledged this record (acks=all), or the
-                // batch deadline passes. Only an acknowledged row may be marked published - that is the outbox's
-                // guarantee. Records later in the batch were sent concurrently, so most of them are already done.
-                futures.get(i).get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-            }
-            catch (InterruptedException e) {
-                // Shutdown, not a problem with this row: keep the interrupt flag and don't count an attempt.
-                Thread.currentThread().interrupt();
-                break;
-            }
-            catch (ExecutionException | TimeoutException e) {
-                // ExecutionException wraps what the producer reported (timeout after delivery.timeout.ms,
-                // RecordTooLargeException, ...); TimeoutException means our own batch deadline passed first.
-                Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
-                outboxRepository.recordError(String.valueOf(cause), event.getSeq());
-                log.warn("Outbox relay: send failed for seq {} (event {}), stopping this batch: {}",
-                        event.getSeq(), event.getId(), cause.toString());
-                // Rows after this one stay unpublished even if they were delivered: the next tick sends them again
-                // after this row, so the latest state is also the last one in the log. Consumers absorb the duplicates.
-                break;
-            }
-
-            // Outside the try: a database error here must roll the transaction back, not count as a failed send.
-            outboxRepository.markPublished(event.getSeq());
-        }
-    }
-
-    private ProducerRecord<String, String> toRecord(OutboxEvent event) {
-
-        ProducerRecord<String, String> record = new ProducerRecord<>(event.getTopic(), event.getAggregateId(), event.getPayload());
-
-        record.headers()
-                .add(new RecordHeader(EventHeaders.EVENT_ID, event.getId().toString().getBytes(StandardCharsets.UTF_8)))
-                .add(new RecordHeader(EventHeaders.EVENT_TYPE, event.getEventType().getBytes(StandardCharsets.UTF_8)))
-                .add(new RecordHeader(EventHeaders.SCHEMA_VERSION, String.valueOf(event.getSchemaVersion()).getBytes(StandardCharsets.UTF_8)));
-
-        return record;
     }
 }

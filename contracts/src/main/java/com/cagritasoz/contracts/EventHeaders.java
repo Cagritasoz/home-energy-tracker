@@ -7,6 +7,7 @@ public final class EventHeaders {
     public static final String EVENT_ID = "event_id";
     public static final String EVENT_TYPE = "event_type";
     public static final String SCHEMA_VERSION = "schema_version";
+    public static final String CORRELATION_ID = "correlation_id";
 
     private EventHeaders() {
     }
