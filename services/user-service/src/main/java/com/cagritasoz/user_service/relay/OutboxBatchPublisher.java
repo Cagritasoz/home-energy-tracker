@@ -69,6 +69,7 @@ public class OutboxBatchPublisher {
                 // the key, so one user's events always share a partition), then returns at once. A separate
                 // sender thread ships ready batches to the broker - typically this whole loop in one or two requests.
                 // Records to the same partition keep this send() order (idempotent producer).
+                // After careful consideration and many redesigns, KafkaProducer's own retry/backoff → handles communication with Kafka.
                 futures.add(kafkaTemplate.send(toRecord(event)));
             }
             catch (RuntimeException e) {
@@ -102,12 +103,18 @@ public class OutboxBatchPublisher {
                 break;
             }
             catch (ExecutionException | TimeoutException e) {
+
                 // ExecutionException wraps what the producer reported (timeout after delivery.timeout.ms,
                 // RecordTooLargeException, ...); TimeoutException means our own batch deadline passed first.
-                Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
-                outboxRepository.recordError(String.valueOf(cause), event.getSeq());
+                // Spring adds its own wrapper around the producer's error (KafkaProducerException "Failed to send",
+                // or KafkaException "Send failed" when send() threw), which says nothing about the reason - unwrapping
+                // it so last_error, the log line and BatchResult.failure see the real exception.
+                Throwable cause = rootCause(e instanceof ExecutionException ? e.getCause() : e);
+
+                outboxRepository.recordError(cause.toString(), event.getSeq());
                 log.warn("Outbox relay: send failed for seq {} (event {}), stopping this batch: {}",
                         event.getSeq(), event.getId(), cause.toString());
+
                 // Rows after this one stay unpublished even if they were delivered: the next tick sends them again
                 // after this row, so the latest state is also the last one in the log. Consumers absorb the duplicates.
                 outcome = BatchResult.Outcome.FAILED;
@@ -123,8 +130,23 @@ public class OutboxBatchPublisher {
             outboxRepository.markPublished(publishedSeqs);
         }
 
-        // full means "Found pending row count is equal to batchSize" -> There are potentially more batches to send.
+        // full means "Pending row count is equal to batchSize" -> There are potentially more batches to send.
+        // "full" is an important flag to drain backlog efficiently after an outage because it triggers relays maxBatchesPerTick.
         return new BatchResult(outcome, publishedSeqs.size(), events.size() == batchSize, failure);
+    }
+
+    // Strips only spring-kafka's wrappers (KafkaProducerException extends spring's KafkaException); Kafka's own
+    // exceptions, which are the real reasons, are left alone even when they have a cause themselves.
+    private static Throwable rootCause(Throwable throwable) {
+
+        Throwable current = throwable;
+
+        // Recursively strip springs kafka wrappers.
+        while (current instanceof org.springframework.kafka.KafkaException && current.getCause() != null) {
+            current = current.getCause();
+        }
+
+        return current;
     }
 
     private ProducerRecord<String, String> toRecord(OutboxEvent event) {
