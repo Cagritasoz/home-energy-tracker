@@ -45,6 +45,7 @@ public class OutboxRelay {
     //    of failed rows.
     private final Counter rowsPublishedCounter;
 
+    // A counter represents something that accumulates, it only ever goes up never down.
     private final Counter batchesFailedCounter;
 
     // Written only by the scheduler thread; volatile because the metrics gauge reads it from another thread.
@@ -149,7 +150,7 @@ public class OutboxRelay {
 
         // initial * 2^(failedTicks - 1), capped. The shift is bounded first so it cannot overflow.
         // Math.min guard prevents the shift from becoming absurdly large.
-        // This determines how many times the initial backoff will be doubled.
+        // doublings determines how many times the initial backoff will be doubled.
         // failedTicks = 1, doublings = 0, no double operations, use initial backoff | failed ticks = 2, doublings = 1, double it once...
         int doublings = Math.min(failedTicks - 1, 20);
 
@@ -172,7 +173,7 @@ public class OutboxRelay {
             log.info("Outbox relay: publishing again after {} failed tick(s)", consecutiveFailedTicks);
         }
         consecutiveFailedTicks = 0;
-        backoffUntilNanos = nanoClock.getAsLong(); // no waiting
+        backoffUntilNanos = nanoClock.getAsLong(); // no waiting anymore
 
     }
 }

@@ -36,15 +36,7 @@ import org.testcontainers.kafka.KafkaContainer;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -65,6 +57,9 @@ import static org.awaitility.Awaitility.await;
 // Every test uses its own topic, so records left over from an earlier test never show up in a later
 // one, and every test starts with an empty outbox table.
 @ExtendWith(OutputCaptureExtension.class)
+
+// SpringBootTest means "Use this class as the source of the Spring Boot test application.", class body is empty the annotations are doing the work.
+// webEnvironment = SpringBootTest.WebEnvironment.NONE means "Don't start a web server."
 @SpringBootTest(classes = RelayIT.RelayTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Import({PostgresTestContainerConfig.class, KafkaTestContainerConfig.class})
 class RelayIT {
@@ -144,7 +139,10 @@ class RelayIT {
         records.forEach(r -> byUser.computeIfAbsent(r.key(), k -> new ArrayList<>()).add(r));
 
         byUser.forEach((user, userRecords) -> {
+
+            // getFirst() since each record per user shares the same partition anyway.
             assertThat(userRecords).extracting(ConsumerRecord::partition).containsOnly(userRecords.getFirst().partition());
+
             assertThat(userRecords).extracting(r -> header(r, EventHeaders.EVENT_ID))
                     .containsExactlyElementsOf(rows.stream().filter(s -> s.aggregateId().equals(user))
                             .map(s -> s.eventId().toString()).toList());
@@ -190,35 +188,76 @@ class RelayIT {
             insertEvent(topic, uuid(), null);
         }
 
+        // The order of events, in short:
+        //   1. Instance A (a second thread) takes the advisory lock and says so (lockHeld).
+        //   2. The test thread, acting as Instance B, waits for that, then runs a tick and sees IDLE.
+        //   3. The test thread tells A to let go (release); A's transaction ends and the lock is freed.
+        //   4. B's next tick publishes.
+        // A latch is a one-shot gate: await() blocks until countDown() has been called as many times as the
+        // latch was created with (here 1). await(timeout) returns true if the gate opened and false if the
+        // timeout passed first - the timeouts below are only safety nets so a broken test fails instead of hanging.
+
         // "Instance A": a transaction on its own thread that takes the relay's advisory lock and sits on it.
+        // "Don't let the test continue until Instance A has definitely acquired the advisory lock."
+        // "A" opens this gate (countDown) right after it got the lock; the test thread waits on it.
         CountDownLatch lockHeld = new CountDownLatch(1);
+
+        // "Instance A should hold the lock until I explicitly tell it to release it."
+        // The test thread opens this gate (countDown) when it is done checking; A waits on it while holding the lock.
         CountDownLatch release = new CountDownLatch(1);
-        ExecutorService otherInstance = Executors.newSingleThreadExecutor();
-        Future<?> holder = otherInstance.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-            assertThat(outboxRepository.advisoryLockAcquired(RELAY_LOCK_KEY)).isTrue();
-            lockHeld.countDown();
+
+        // try-with-resources: ExecutorService is AutoCloseable since Java 19, and close() shuts it down and waits
+        // for its thread even if an assertion below fails (the old explicit shutdown() was skipped when
+        // holder.get() threw).
+        //
+        // "Give me an executor that has one worker thread.", Simulates the instance A holding the lock.
+        try (ExecutorService otherInstance = Executors.newSingleThreadExecutor()) {
+
+            // Instance A, running on the executor's thread: one transaction that takes the lock and holds it.
+            // submit() returns at once; "holder" is a handle to wait for A's thread to finish (and to see its failure).
+            Future<?> holder = otherInstance.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+
+                // The relay's own lock call; true means A really holds the advisory lock now.
+                assertThat(outboxRepository.advisoryLockAcquired(RELAY_LOCK_KEY)).isTrue();
+
+                // Instance A says I acquired the lock: opens the lockHeld gate for the test thread.
+                lockHeld.countDown();
+
+                try {
+                    // A holds the lock until the test thread calls release.countDown().
+                    // The 30 s is A's patience: the most it will hold the lock if the test never releases it. If that
+                    // happens, fail here (it surfaces through holder.get() below) instead of silently giving up
+                    // the lock after the timeout.
+                    assertThat(release.await(30, TimeUnit.SECONDS)).isTrue();
+                }
+                catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+
             try {
-                release.await(30, TimeUnit.SECONDS);
+                // Test thread waits on lockHeld count to reach 0. Instance A counts it down above.
+                // The 10 s is the most we wait for A to get the lock; false (timeout) means A never got it, and
+                // the test fails here instead of testing nothing.
+                assertThat(lockHeld.await(10, TimeUnit.SECONDS)).isTrue();
+
+                // "Instance B (test thread)" must not wait for the lock and must not send anything.
+                BatchResult whileLocked = publisher.publishBatch();
+
+                assertThat(whileLocked.outcome()).isEqualTo(BatchResult.Outcome.IDLE);
+                assertThat(pendingSeqs()).hasSize(3); // "A" acquired the lock but did nothing.
+                assertThat(consume(topic, 1, Duration.ofSeconds(2))).isEmpty(); // nothing was sent to kafka.
             }
-            catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            finally {
+
+                // Open the release gate: A wakes up, its transaction ends and the advisory lock is freed.
+                // In finally so A is always let go, even when an assertion above failed.
+                release.countDown();
+
+                // Wait for A's thread to finish (10 s at most). If A failed inside its transaction, its exception
+                // is rethrown here as an ExecutionException, so a failure in the other thread fails the test.
+                holder.get(10, TimeUnit.SECONDS);
             }
-        }));
-
-        try {
-            assertThat(lockHeld.await(10, TimeUnit.SECONDS)).isTrue();
-
-            // "Instance B" must not wait for the lock and must not send anything.
-            BatchResult whileLocked = publisher.publishBatch();
-
-            assertThat(whileLocked.outcome()).isEqualTo(BatchResult.Outcome.IDLE);
-            assertThat(pendingSeqs()).hasSize(3);
-            assertThat(consume(topic, 1, Duration.ofSeconds(2))).isEmpty();
-        }
-        finally {
-            release.countDown();
-            holder.get(10, TimeUnit.SECONDS);
-            otherInstance.shutdown();
         }
 
         // The lock is released with A's transaction; B's next tick takes over.
@@ -279,7 +318,8 @@ class RelayIT {
 
         // The broker is back: the same rows are sent, and the backlog drains. The producer may need a moment
         // to reconnect, so failed ticks in between are fine.
-        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(500))
+        await().atMost(Duration.ofSeconds(60))
+                .pollInterval(Duration.ofMillis(500))
                 .untilAsserted(() -> {
                     publisher.publishBatch();
                     assertThat(pendingSeqs()).isEmpty();
@@ -298,12 +338,15 @@ class RelayIT {
         assertThat(records).extracting(r -> header(r, EventHeaders.EVENT_ID)).containsAll(expectedIds);
 
         for (String user : List.of(userA, userB)) {
+
             List<String> userIds = pending.stream().filter(s -> s.aggregateId().equals(user)).map(s -> s.eventId().toString()).toList();
+
             List<String> lastCopyOrder = records.stream().filter(r -> r.key().equals(user))
                     .map(r -> header(r, EventHeaders.EVENT_ID)).toList();
+
             // keep each id's last position, then compare the order of those positions
             List<String> byLastOccurrence = userIds.stream()
-                    .sorted((a, b) -> Integer.compare(lastCopyOrder.lastIndexOf(a), lastCopyOrder.lastIndexOf(b))).toList();
+                    .sorted(Comparator.comparingInt(lastCopyOrder::lastIndexOf)).toList();
             assertThat(byLastOccurrence).containsExactlyElementsOf(userIds);
         }
 
@@ -335,7 +378,7 @@ class RelayIT {
             assertThat(result.outcome()).isEqualTo(BatchResult.Outcome.FAILED);
             assertThat(tookMs).as("one 1 s metadata wait, not 20 of them").isLessThan(5_000L);
             assertThat(pendingSeqs()).hasSize(20);
-            assertThat(jdbc.queryForObject("SELECT last_error FROM outbox_events WHERE seq = ?", String.class, rows.get(0).seq()))
+            assertThat(jdbc.queryForObject("SELECT last_error FROM outbox_events WHERE seq = ?", String.class, rows.getFirst().seq()))
                     .contains("not present in metadata");
             assertThat(jdbc.queryForObject("SELECT sum(attempts) FROM outbox_events", Long.class)).isEqualTo(1L);
         }
@@ -355,22 +398,23 @@ class RelayIT {
 
         // The relay's clock is ours, so "wait 4 s" is an assignment and not a sleep. Only the real Kafka
         // timeouts (the failed ticks themselves) take wall-clock time.
+        // Initial value is 0 for clock.
         AtomicLong nowNanos = new AtomicLong();
         OutboxRelay relay = new OutboxRelay(publisher, new SimpleMeterRegistry(), 10, 4_000, 30_000, nowNanos::get);
 
         pauseBroker();
         try {
-            relay.relay(); // a real attempt: waits out the send deadline, publishes nothing
+            relay.relay(); // a real attempt because initially backoffUntilNanos = nowNanos: waits out the send deadline, publishes nothing
             assertThat(relay.consecutiveFailedTicks()).isEqualTo(1);
             assertThat(attemptsOf(stuck)).isEqualTo(1);
 
             // Backing off: the tick returns at once and touches neither the row, nor the lock, nor Kafka.
             long start = System.nanoTime();
             relay.relay();
-            assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)).isLessThan(500L);
-            assertThat(attemptsOf(stuck)).isEqualTo(1);
+            assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)).isLessThan(500L); // Check that returned immediately.
+            assertThat(attemptsOf(stuck)).isEqualTo(1); // No publishBatch() call, attempt is not bumped.
 
-            nowNanos.addAndGet(TimeUnit.SECONDS.toNanos(4)); // the first delay has passed
+            nowNanos.addAndGet(TimeUnit.SECONDS.toNanos(4)); // the first delay of 4 secs has passed. Simulate clock.
             relay.relay(); // a second real attempt, still failing: the delay doubles
             assertThat(relay.consecutiveFailedTicks()).isEqualTo(2);
             assertThat(attemptsOf(stuck)).isEqualTo(2);
@@ -384,12 +428,26 @@ class RelayIT {
 
         // Kafka is back. Each poll moves the clock past any delay, so every poll is a real attempt; the
         // producer may need a moment to reconnect, so a few failed ticks before the success are fine.
-        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofSeconds(1)).pollInSameThread()
+        // Awaitility because the recovery time is not predictable (reconnect, metadata refetch, request
+        // timeouts): it retries the tick until the backlog is drained instead of a fixed sleep that is either
+        // too short (flaky) or too long (slow), and still fails the test after the limit.
+        await()
+                // "Don't keep trying for more than 60 real seconds."
+                .atMost(Duration.ofSeconds(60))
+
+                // "Between attempts, wait approximately one second."
+                .pollInterval(Duration.ofSeconds(1))
+
+                // "Run the condition on the same thread as the test."
+                .pollInSameThread()
+
+                // Awaitility repeatedly runs the following Runnable lambda it until all assertions inside it pass.
                 .untilAsserted(() -> {
-                    nowNanos.addAndGet(TimeUnit.SECONDS.toNanos(30));
+                    nowNanos.addAndGet(TimeUnit.SECONDS.toNanos(30)); // Bypass any backoff wait.
                     relay.relay();
-                    assertThat(pendingSeqs()).isEmpty();
+                    assertThat(pendingSeqs()).isEmpty(); // Backlog is drained.
                 });
+
         assertThat(relay.consecutiveFailedTicks()).isZero();
 
     }
@@ -447,7 +505,7 @@ class RelayIT {
 
     private int attemptsOf(Seeded row) {
 
-        return jdbc.queryForObject("SELECT attempts FROM outbox_events WHERE seq = ?", Integer.class, row.seq());
+        return Objects.requireNonNull(jdbc.queryForObject("SELECT attempts FROM outbox_events WHERE seq = ?", Integer.class, row.seq()));
 
     }
 

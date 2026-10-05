@@ -59,6 +59,8 @@ public interface OutboxRepository extends JpaRepository<OutboxEvent, Long> {
     long countByParkedTrue();
 
     // LIMIT 1 is what guarantees the oldest row.
+    // Returns 0 if there are no pending rows because of COALESCE.
+    // EPOCH FROM converts the interval into seconds and CAST casts it as double precision.
     @Query(value = """
             SELECT COALESCE(CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - (
                 SELECT created_at FROM outbox_events
