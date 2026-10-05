@@ -42,6 +42,7 @@
 			<artifactId>spring-boot-starter-data-jpa</artifactId>
 		</dependency>
 
+		<!-- Also brings micrometer-core (spring-boot-starter-micrometer-metrics), used by OutboxMetrics. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
@@ -143,6 +144,21 @@
 			<!-- The PostgreSQLContainer class. In Testcontainers 2.x every database is its own testcontainers-* module. -->
 			<groupId>org.testcontainers</groupId>
 			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<!-- Polling assertions for things that happen on another thread or in a container ("until the backlog
+			     is drained"). Boot 4's starter-test no longer brings it; the version comes from Boot's BOM. -->
+			<groupId>org.awaitility</groupId>
+			<artifactId>awaitility</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<!-- The KafkaContainer class (apache/kafka image, KRaft) for RelayIT. -->
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-kafka</artifactId>
 			<scope>test</scope>
 		</dependency>
 

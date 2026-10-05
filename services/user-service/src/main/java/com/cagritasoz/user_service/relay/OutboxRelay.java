@@ -1,126 +1,179 @@
 package com.cagritasoz.user_service.relay;
 
-import com.cagritasoz.contracts.EventHeaders;
-import com.cagritasoz.user_service.entity.OutboxEvent;
-import com.cagritasoz.user_service.repository.OutboxRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 
+// The scheduled side of the relay: decides WHEN to publish. OutboxBatchPublisher decides WHAT (it holds the
+// lock and the transaction).
+//
+// Why a backoff and not a circuit breaker: this relay pulls from Postgres with one scheduler thread, so a
+// slow or dead Kafka cannot make threads pile up, and the outbox table itself is the buffer that absorbs an
+// outage. Kafka is not at risk either - the producer already backs off its own reconnects and retries, and the
+// relay sends at most one batch of 50 records per tick. What a failing tick does cost is the relay's own
+// resources: a database connection and the advisory lock for up to send-timeout-ms, an UPDATE of
+// attempts/last_error, and a WARN line - every ~7 s, forever, for an outage or a poison row. So after a tick
+// that made no progress the relay simply waits longer before the next one, doubling up to a cap, and goes back
+// to normal as soon as a tick makes progress. No half-open probes, no failure-rate window.
 @Slf4j
 @Component
 public class OutboxRelay {
 
-    private final OutboxRepository outboxRepository;
+    private final OutboxBatchPublisher batchPublisher;
 
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final int maxBatchesPerTick;
 
-    private final int batchSize;
+    private final long initialBackoffNanos;
 
-    // One deadline for the whole batch, not per record: how long the relay waits for all acks while
-    // it holds the advisory lock and a database connection.
-    private final long sendTimeoutMs;
+    private final long maxBackoffNanos;
 
-    public OutboxRelay(OutboxRepository outboxRepository,
-                       KafkaTemplate<String, String> kafkaTemplate,
-                       @Value("${app.outbox.relay.batch-size}") int batchSize,
-                       @Value("${app.outbox.relay.send-timeout-ms}") long sendTimeoutMs) {
-        this.outboxRepository = outboxRepository;
-        this.kafkaTemplate = kafkaTemplate;
-        this.batchSize = batchSize;
-        this.sendTimeoutMs = sendTimeoutMs;
+    // Injectable so a test can move time without sleeping; production uses System.nanoTime.
+    private final LongSupplier nanoClock;
+
+    // Two counters with different units, named so nobody divides one by the other:
+    //  - outbox.rows.published: rows acknowledged by Kafka and marked published (a counter of ROWS);
+    //  - outbox.batches.failed: batches that stopped on a send error (a counter of BATCHES). The rows behind the
+    //    failed one are neither published nor failed - they stay pending and are sent again - and a failure that
+    //    hits a whole partition still counts once, so this is "how often the relay hit an error", not a count
+    //    of failed rows.
+    private final Counter rowsPublishedCounter;
+
+    // A counter represents something that accumulates, it only ever goes up never down.
+    private final Counter batchesFailedCounter;
+
+    // Written only by the scheduler thread; volatile because the metrics gauge reads it from another thread.
+    private volatile int consecutiveFailedTicks = 0;
+
+    // A System.nanoTime() reading, which may be negative: only ever compared as a difference, and initialized
+    // from the clock itself so "not backing off" is true from the start.
+    // "Don't attempt another relay until this point on the stopwatch."
+    // Wait time = 2 secs = 2,000,000,000 ns. backoffUntilNanos = System.nanoTime() (current nano time) + 2,000,000,000
+    private volatile long backoffUntilNanos;
+
+    // Spring calls this constructor which delegates to the package private constructor.
+    // Clock is supplied as System.nanoTime() and tests can supply their own clock.
+    @Autowired
+    public OutboxRelay(OutboxBatchPublisher batchPublisher,
+                       MeterRegistry meterRegistry,
+                       @Value("${app.outbox.relay.max-batches-per-tick}") int maxBatchesPerTick,
+                       @Value("${app.outbox.relay.backoff.initial-ms}") long initialBackoffMs,
+                       @Value("${app.outbox.relay.backoff.max-ms}") long maxBackoffMs) {
+        this(batchPublisher, meterRegistry, maxBatchesPerTick, initialBackoffMs, maxBackoffMs, System::nanoTime);
+    }
+
+    OutboxRelay(OutboxBatchPublisher batchPublisher,
+                MeterRegistry meterRegistry,
+                int maxBatchesPerTick,
+                long initialBackoffMs,
+                long maxBackoffMs,
+                LongSupplier nanoClock) {
+        this.batchPublisher = batchPublisher;
+        this.maxBatchesPerTick = maxBatchesPerTick;
+        this.initialBackoffNanos = TimeUnit.MILLISECONDS.toNanos(initialBackoffMs);
+        this.maxBackoffNanos = TimeUnit.MILLISECONDS.toNanos(maxBackoffMs);
+        this.nanoClock = nanoClock;
+        this.backoffUntilNanos = nanoClock.getAsLong();
+        this.rowsPublishedCounter = meterRegistry.counter("outbox.rows.published");
+        this.batchesFailedCounter = meterRegistry.counter("outbox.batches.failed");
+    }
+
+    // Failed ticks in a row without any progress; 0 = healthy. The alarm signal for "the relay is backing off".
+    public int consecutiveFailedTicks() {
+
+        return consecutiveFailedTicks;
+
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay.interval-ms}")
-    @Transactional
     public void relay() {
 
-        if(!outboxRepository.advisoryLockAcquired(7_777_777L)) {
+        // Still backing off from the last failed tick: do nothing, not even open a transaction.
+        // Equivalent to now < backoffUntilNanos.
+        if (nanoClock.getAsLong() - backoffUntilNanos < 0) {
             return;
         }
 
-        List<OutboxEvent> events = outboxRepository.findByPublishedAtIsNullAndParkedFalseOrderBySeqAsc(PageRequest.of(0, batchSize));
+        for (int batch = 0; batch < maxBatchesPerTick; batch++) {
 
-        // Phase 1: hand every record to the producer before waiting for any of them.
-        List<CompletableFuture<SendResult<String, String>>> futures = new ArrayList<>(events.size());
+            // A database error is not counted as a failed tick: it says nothing about Kafka or the rows, and
+            // delaying the next tick would only slow the recovery. The exception reaches Spring's scheduler,
+            // which logs it at ERROR with the stack trace and keeps the schedule alive.
+            BatchResult result = batchPublisher.publishBatch();
 
-        for (OutboxEvent event : events) {
+            rowsPublishedCounter.increment(result.published());
 
-            try {
-                // send() doesn't wait for the network: the scheduled thread serializes the key and value and
-                // appends the record to the producer's accumulator, into the batch for its partition (chosen from
-                // the key, so one user's events always share a partition), then returns at once. A separate
-                // sender thread ships ready batches to the broker - typically this whole loop in one or two requests.
-                // Records to the same partition keep this send() order (idempotent producer).
-                futures.add(kafkaTemplate.send(toRecord(event)));
+            switch (result.outcome()) {
+                case IDLE, INTERRUPTED -> {
+                    // Nothing to publish, another instance holds the lock, or shutdown: no information about
+                    // Kafka's health, so the backoff state stays as it is.
+                    return;
+                }
+                case FAILED -> {
+                    batchesFailedCounter.increment();
+
+                    if (result.published() > 0) {
+                        // The batch failed part-way but the rows before the failure went out: Kafka is working,
+                        // the failed row is the head of the queue now. Not a stalled tick, so no backoff yet; if
+                        // that row keeps failing, the next tick publishes nothing and starts the backoff.
+                        recovered();
+                    }
+                    else {
+                        backOff();
+                    }
+                    return;
+                }
+                case PUBLISHED -> {
+                    recovered();
+                    if (!result.full()) {
+                        return; // No more batches to send, break the loop.
+                    }
+                }
             }
-            catch (RuntimeException e) {
-                // send() itself can throw (e.g. no topic metadata within max.block.ms). Nothing after this row is
-                // sent: it would only be marked unpublished and sent again anyway, behind this row.
-                futures.add(CompletableFuture.failedFuture(e));
-                break;
-            }
-        }
-
-        // Phase 2: collect the outcomes in seq order and mark the published prefix.
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(sendTimeoutMs);
-
-        for (int i = 0; i < futures.size(); i++) {
-
-            OutboxEvent event = events.get(i);
-
-            try {
-                // The scheduled thread blocks here until the broker has acknowledged this record (acks=all), or the
-                // batch deadline passes. Only an acknowledged row may be marked published - that is the outbox's
-                // guarantee. Records later in the batch were sent concurrently, so most of them are already done.
-                futures.get(i).get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-            }
-            catch (InterruptedException e) {
-                // Shutdown, not a problem with this row: keep the interrupt flag and don't count an attempt.
-                Thread.currentThread().interrupt();
-                break;
-            }
-            catch (ExecutionException | TimeoutException e) {
-                // ExecutionException wraps what the producer reported (timeout after delivery.timeout.ms,
-                // RecordTooLargeException, ...); TimeoutException means our own batch deadline passed first.
-                Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
-                outboxRepository.recordError(String.valueOf(cause), event.getSeq());
-                log.warn("Outbox relay: send failed for seq {} (event {}), stopping this batch: {}",
-                        event.getSeq(), event.getId(), cause.toString());
-                // Rows after this one stay unpublished even if they were delivered: the next tick sends them again
-                // after this row, so the latest state is also the last one in the log. Consumers absorb the duplicates.
-                break;
-            }
-
-            // Outside the try: a database error here must roll the transaction back, not count as a failed send.
-            outboxRepository.markPublished(event.getSeq());
         }
     }
 
-    private ProducerRecord<String, String> toRecord(OutboxEvent event) {
+    // "This entire attempt made zero progress. Don't hammer the database/Kafka again on every scheduler tick."
+    // Backoff protects the application/database from repeatedly attempting work that currently cannot make progress.
+    // Backoff does not handle kafka communication, kafka producer settings handle kafka retries.
+    // Exponential backoff up to max of 30 secs.
+    private void backOff() {
 
-        ProducerRecord<String, String> record = new ProducerRecord<>(event.getTopic(), event.getAggregateId(), event.getPayload());
+        int failedTicks = consecutiveFailedTicks + 1;
+        consecutiveFailedTicks = failedTicks;
 
-        record.headers()
-                .add(new RecordHeader(EventHeaders.EVENT_ID, event.getId().toString().getBytes(StandardCharsets.UTF_8)))
-                .add(new RecordHeader(EventHeaders.EVENT_TYPE, event.getEventType().getBytes(StandardCharsets.UTF_8)))
-                .add(new RecordHeader(EventHeaders.SCHEMA_VERSION, String.valueOf(event.getSchemaVersion()).getBytes(StandardCharsets.UTF_8)));
+        // initial * 2^(failedTicks - 1), capped. The shift is bounded first so it cannot overflow.
+        // Math.min guard prevents the shift from becoming absurdly large.
+        // doublings determines how many times the initial backoff will be doubled.
+        // failedTicks = 1, doublings = 0, no double operations, use initial backoff | failed ticks = 2, doublings = 1, double it once...
+        int doublings = Math.min(failedTicks - 1, 20);
 
-        return record;
+        // initialBackoffNanos << doublings is a bit shift. "a << 1 = a x 2", "a << 2 = a x 2 x 2", "a << 3 = a x 2 x 2 x 2"...
+        // doublings = 0, delayNanos = initial backoff | doublings = 1, delayNanos = initial backoff x 2...
+        long delayNanos = Math.min(maxBackoffNanos, initialBackoffNanos << doublings);
+        if (delayNanos <= 0) { // the shift overflowed for a huge initial value and is negative.
+            delayNanos = maxBackoffNanos;
+        }
+        backoffUntilNanos = nanoClock.getAsLong() + delayNanos;
+
+        log.warn("Outbox relay: {} tick(s) in a row without progress, next attempt in {} ms",
+                failedTicks, TimeUnit.NANOSECONDS.toMillis(delayNanos));
+
+    }
+
+    private void recovered() {
+
+        if (consecutiveFailedTicks > 0) {
+            log.info("Outbox relay: publishing again after {} failed tick(s)", consecutiveFailedTicks);
+        }
+        consecutiveFailedTicks = 0;
+        backoffUntilNanos = nanoClock.getAsLong(); // no waiting anymore
+
     }
 }

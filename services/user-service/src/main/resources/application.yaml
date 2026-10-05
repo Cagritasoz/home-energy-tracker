@@ -30,29 +30,103 @@ spring:
 
   kafka:
     bootstrap-servers: localhost:9094
+    # The relay's producer, every setting that matters spelled out, including the ones that equal the
+    # kafka-clients 4.2.1 default (marked "default"): so the behavior stays visible here and does not change
+    # silently with a library upgrade. They sit under producer, not spring.kafka.properties: that block is
+    # handed to every Kafka client, consumers included, which don't know these settings.
+    #
+    # Time budget of one relay tick (see app.outbox.relay below): send() may wait max.block.ms for metadata; the
+    # acks of the batch are awaited for send-timeout-ms; the producer itself stops trying a record after
+    # delivery.timeout.ms. These are kept in the same range on purpose, so nothing outlives the tick that sent it.
     producer:
+       # --- what is sent ---
        # StringSerializer to match OutboxEvent.aggregateId. StringSerializer, not JacksonJsonSerializer,
        # for the value - OutboxRelay sends outbox_events.payload verbatim, and it's already a serialized
        # JSON string via object mapper; running it through JacksonJsonSerializer again would wrap it in an extra pair of
        # escaped quotes instead of sending the JSON object itself.
        key-serializer: org.apache.kafka.common.serialization.StringSerializer
        value-serializer: org.apache.kafka.common.serialization.StringSerializer
-       # Deduplicates (means finding and removing extra copies of identical data)
-       # a retry the PRODUCER itself issues when a send's ack is lost in transit (the
-       # broker already wrote it, the client just never heard back and would otherwise resend) - a
-       # different, narrower problem than the outbox's own at-least-once duplicates (see OutboxRelay),
-       # which happen a full relay tick apart and this can't and doesn't deduplicate. kafka-clients 4.2.1
-       # (this project's resolved version) already defaults both of these to true/all since Kafka 3.0 -
-       # spelled out explicitly anyway rather than relying on an unstated library default for something
-       # correctness-relevant, same reasoning as pinning auto-offset-reset explicitly in usage-service.
-       # Both sit under producer, not spring.kafka.properties: that block is handed to every Kafka client,
-       # consumers included, which don't know these settings.
+       # Name shown in broker logs and client metrics, so this relay's connections can be told apart from
+       # other clients of the same cluster. Default: none (the client invents "producer-N").
+       client-id: user-service-outbox-relay
+       # Compression of record batches. default: none. Outbox payloads are small JSON objects sent a few
+       # per second; compressing would cost CPU for no measurable saving here.
+       compression-type: none
+
+       # --- durability ---
+       # acks=all (default): the broker acknowledges only after the write is on every in-sync replica. The
+       # relay marks a row published only after this ack, so this is what "published" means.
        acks: all
+       # retries (default 2147483647, effectively unbounded): how many times the producer re-sends a batch
+       # that failed with a retriable error (leader change, timeout, ...). Not the knob to turn: the time
+       # actually allowed is bounded by delivery.timeout.ms below, and with idempotence retries=0 is not even
+       # accepted.
+       retries: 2147483647
+       # Memory the producer may use for records waiting to be sent. default: 32MB. One tick sends at most
+       # batch-size (50) records of a few hundred bytes, so this is never reached; it matters only as the point
+       # where send() would start blocking (up to max.block.ms).
+       buffer-memory: 32MB
+       # Soft cap, in bytes, of one partition's batch in the accumulator. default: 16KB. A tick's 50 records
+       # spread over 3 partitions are a few KB each, so a batch normally leaves because of linger.ms or because
+       # the tick has finished handing records over, not because it is full.
+       batch-size: 16KB
+
        properties:
+         # Deduplicates (means finding and removing extra copies of identical data) a retry the PRODUCER
+         # itself issues when a send's ack is lost in transit (the broker already wrote it, the client just
+         # never heard back and would otherwise resend). A different, narrower problem than the outbox's own
+         # at-least-once duplicates (a record re-sent by a later tick), which this cannot deduplicate.
+         # default: true since Kafka 3.0. Requires acks=all and retries > 0.
          enable.idempotence: true
-         # How long send() may block the relay thread when it has no topic metadata (broker unreachable).
-         # The default is 60 s, during which the relay would hold the advisory lock and a DB connection.
-         max.block.ms: 5000
+         # Requests sent to one broker without waiting for a response. default: 5. 5 is the most that keeps
+         # per-partition order under retries when idempotence is on (the broker re-orders by sequence number).
+         max.in.flight.requests.per.connection: 5
+         # How long the producer waits for more records before sending a partition's batch. default: 5 ms
+         # (it was 0 before Kafka 4.0). The relay hands over up to 50 records in a few milliseconds, so they
+         # normally share one request per broker; the cost is at most 5 ms of latency.
+         linger.ms: 5
+         # Largest request the producer will send (one record counts fully). default: 1048576 (1 MB). Larger
+         # than the 256 KB payload limit of outbox_events (V8), so a record cannot exceed it; the broker's
+         # own limit (message.max.bytes, also ~1 MB) is the other half of that guarantee.
+         max.request.size: 1048576
+
+         # --- time limits (the part that drives the relay's failure behavior) ---
+         # How long send() may block the relay thread when it needs topic metadata and cannot get it (broker
+         # unreachable, or metadata dropped after a failed tick - observed in RelayIT). default: 60 s, during
+         # which the relay would hold the advisory lock and a DB connection. A healthy producer has the
+         # metadata cached and never blocks, so only a failing tick ever waits this long: 1.5 s makes a failed
+         # tick end quickly (it throws KafkaException "Send failed" wrapping the TimeoutException).
+         max.block.ms: 1500
+         # How long the producer keeps trying to deliver a record before failing it. default: 120 s, but the
+         # relay stops waiting after send-timeout-ms (below): every record it abandoned would stay in the
+         # producer for up to 2 minutes and be delivered as a duplicate if Kafka came back meanwhile, and
+         # every failing tick would add 50 more. Kept equal to send-timeout-ms so the producer gives up on its
+         # own at about the moment the relay does. Which of the two reports first is a race (measured in
+         # RelayIT: in-flight requests are only failed when request.timeout.ms fires, so the relay's own
+         # deadline usually wins); either way the abandoned records are dead within a second or so, not 2
+         # minutes. The outbox is the retry mechanism, so failing a tick early is cheap: the row is simply
+         # sent again. Must be >= request.timeout.ms + linger.ms or the producer refuses to start.
+         delivery.timeout.ms: 5000
+         # How long one request waits for the broker's response before it is abandoned and retried (inside
+         # delivery.timeout.ms). default: 30 s, longer than the whole delivery budget above.
+         request.timeout.ms: 3000
+
+         # --- reconnects and retries: the producer's own backoff, which is why the relay needs none against Kafka ---
+         # Wait before re-sending a failed batch; grows exponentially up to the max. defaults: 100 ms / 1000 ms.
+         retry.backoff.ms: 100
+         retry.backoff.max.ms: 1000
+         # Wait before reconnecting to a broker; grows exponentially up to the max. defaults: 50 ms / 1000 ms.
+         reconnect.backoff.ms: 50
+         reconnect.backoff.max.ms: 1000
+         # Idle connections are closed by the client after this long. default: 540000 (9 minutes). The relay
+         # sends nothing for long stretches (a few events per minute), so the next send may reconnect first;
+         # that costs milliseconds and is covered by the time limits above.
+         connections.max.idle.ms: 540000
+         # How often the producer refreshes topic/partition metadata even without errors. default: 300000 (5 min).
+         metadata.max.age.ms: 300000
+         # How long a topic with no sends stays in the producer's metadata before it is dropped. default: 300000
+         # (5 min). After a quiet period the first send fetches metadata again (a few ms when Kafka is up).
+         metadata.max.idle.ms: 300000
 
   security:
     oauth2:
@@ -86,6 +160,21 @@ app:
        batch-size: 50
        # One deadline for all acks of a batch (the relay holds the advisory lock and a DB connection meanwhile).
        send-timeout-ms: 5000
+       max-batches-per-tick: 10
+       # What the relay does after a tick that published nothing (Kafka down, a poison row at the head of the
+       # queue): it skips ticks for initial-ms, then 2x that after the next failure, and so on up to max-ms,
+       # and goes back to every interval-ms as soon as a tick publishes something. Only the relay's own
+       # resources are at stake (a DB connection and the advisory lock for up to send-timeout-ms per failed tick,
+       # an UPDATE of attempts/last_error, a WARN line) - Kafka already gets its backoff from the producer
+       # settings above. A longer wait only delays events that cannot be sent anyway; max-ms bounds the delay
+       # after Kafka is back.
+       backoff:
+         initial-ms: 4000
+         max-ms: 30000
+     purge:
+       retention-days: 7
+       batch-size: 1000
+       cron: "0 0 3 * * *"
 
   security:
     # Required for audience mapper
