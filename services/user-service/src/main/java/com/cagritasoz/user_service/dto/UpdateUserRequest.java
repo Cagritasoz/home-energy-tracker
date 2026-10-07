@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.dto;
 
+import com.cagritasoz.user_service.validation.ValidTimezone;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
@@ -21,9 +22,10 @@ public record UpdateUserRequest(
         @Pattern(regexp = "(?s).*\\S.*", message = "must not be blank")
         String displayName,
 
-        // JIT provisioning creates every account as UTC; the client sets the real one here.
-        // Not validated as an IANA zone id yet - anything is accepted and stored as sent.
-        // TODO: Add a timezone validator.
+        // JIT provisioning creates every account as UTC; the client sets the real one here. It must be one of
+        // ZoneId.getAvailableZoneIds() (exact, case-sensitive spelling, e.g. "Europe/Istanbul"); like the
+        // constraints above, @ValidTimezone only fires when the client actually sent a value.
+        @ValidTimezone
         String timezone
 
 ) {

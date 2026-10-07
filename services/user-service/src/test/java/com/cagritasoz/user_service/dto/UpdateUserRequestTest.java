@@ -7,13 +7,16 @@ import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.ZoneId;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 // Layer 1, and unlike every service test so far, no mocks at all - UpdateUserRequest has no
-// dependencies to fake. A Validator reads the record's own @Size/@Pattern annotations and reports
+// dependencies to fake. A Validator reads the record's own @Size/@Pattern/@ValidTimezone annotations and reports
 // back which ones a given instance breaks, if any - the same mechanism Spring runs automatically
 // behind @Valid on a controller parameter, just invoked by hand here instead of through a real
 // HTTP request.
@@ -89,14 +92,61 @@ class UpdateUserRequestTest {
         assertThat(request.displayName()).isEqualTo("Arthur Morgan");
     }
 
-    @Test
-    void timezone_currentlyAcceptsAnyValue() {
-        // Documents, rather than enforces, today's real (if incomplete) behavior: timezone has no
-        // validation annotation yet - see UpdateUserRequest's own comment on the field. This test
-        // exists so the day someone adds @ValidTimezone, they have to come update or delete a
-        // test that says the opposite, instead of the change slipping in silently.
-        UpdateUserRequest request = UpdateUserRequest.builder().timezone("not-a-real-timezone").build();
+    // ---- timezone: must be one of ZoneId.getAvailableZoneIds() --------------------------------------
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Europe/Istanbul", "UTC", "America/New_York", "Asia/Tokyo", "Etc/GMT-3"})
+    void validTimezone_hasNoViolations(String timezone) {
+        UpdateUserRequest request = UpdateUserRequest.builder().timezone(timezone).build();
 
         assertThat(validator.validate(request)).isEmpty();
+    }
+
+    // The validator and ZoneId.getAvailableZoneIds() must agree on every single id, not just on the few
+    // examples above - otherwise a legitimate zone could be turned away.
+    @Test
+    void everyIdJavaKnows_isAccepted() {
+        for (String zoneId : ZoneId.getAvailableZoneIds()) {
+            UpdateUserRequest request = UpdateUserRequest.builder().timezone(zoneId).build();
+
+            assertThat(validator.validate(request)).as(zoneId).isEmpty();
+        }
+    }
+
+    // "not-a-real-timezone": nonsense. "" and "   ": blank is not "not sent" (that is null), so it is
+    // rejected. " UTC" / "UTC ": surrounding whitespace is not trimmed (displayName is, timezone is
+    // deliberately exact). "europe/istanbul": the match is case-sensitive, so one zone is never stored in
+    // two spellings. "+03:00", "UTC+3", "Z": ZoneId.of() would take these, but they are fixed offsets, not
+    // the region ids the user means by "my time zone", and they are not in getAvailableZoneIds().
+    @ParameterizedTest
+    @ValueSource(strings = {"not-a-real-timezone", "", "   ", " UTC", "UTC ", "europe/istanbul", "Istanbul",
+            "+03:00", "UTC+3", "Z"})
+    void invalidTimezone_isRejectedWithTheTimezoneMessage(String timezone) {
+        UpdateUserRequest request = UpdateUserRequest.builder().timezone(timezone).build();
+
+        Set<ConstraintViolation<UpdateUserRequest>> violations = validator.validate(request);
+
+        assertThat(violations).hasSize(1);
+        ConstraintViolation<UpdateUserRequest> violation = violations.iterator().next();
+        assertThat(violation.getPropertyPath().toString()).isEqualTo("timezone");
+        assertThat(violation.getMessage()).isEqualTo("must be a valid time zone id, for example Europe/Istanbul");
+    }
+
+    // null means "not sent, leave unchanged" - the same rule as for displayName - so it is never validated.
+    @Test
+    void timezoneNotSent_isNotValidated() {
+        UpdateUserRequest request = UpdateUserRequest.builder().displayName("Arthur Morgan").timezone(null).build();
+
+        assertThat(validator.validate(request)).isEmpty();
+    }
+
+    // The two fields are validated independently: each bad one is reported, neither hides the other.
+    @Test
+    void invalidDisplayNameAndInvalidTimezone_areBothReported() {
+        UpdateUserRequest request = UpdateUserRequest.builder().displayName("   ").timezone("nowhere").build();
+
+        assertThat(validator.validate(request))
+                .extracting(violation -> violation.getPropertyPath().toString())
+                .containsExactlyInAnyOrder("displayName", "timezone");
     }
 }
