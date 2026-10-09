@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.service;
 
 import com.cagritasoz.user_service.entity.User;
-import com.cagritasoz.user_service.exception.AccountNotActiveException;
+import com.cagritasoz.user_service.exception.AccountDeletedException;
 import com.cagritasoz.user_service.exception.EmailNotVerifiedException;
 import com.cagritasoz.user_service.exception.MissingIdentityClaimException;
 import com.cagritasoz.user_service.model.UserStatus;
@@ -64,10 +64,10 @@ public class UserProvisioningServiceTest {
     // once with status = DELETED, without two near-identical @Test methods. The (name = "...")
     // customizes what each individual run is labeled as in the test report/output, using {0} for
     // the first (and here, only) parameter - so a failure clearly says which status failed, e.g.
-    // "ensureUsable_nonActiveStatus_throwsAccountNotActive[status=DELETING]".
+    // "ensureUsable_nonActiveStatus_throwsAccountDeleted[status=DELETING]".
     @ParameterizedTest(name = "status={0}")
     @EnumSource(value = UserStatus.class, mode = EnumSource.Mode.EXCLUDE, names = "ACTIVE")
-    void ensureUsable_nonActiveStatus_throwsAccountNotActive(UserStatus status) {
+    void ensureUsable_nonActiveStatus_throwsAccountDeleted(UserStatus status) {
 
         User user = UserFixtures.activeUser().id(USER_ID).status(status).build();
         Jwt token = JwtFixtures.validUser(USER_ID).build();
@@ -75,7 +75,7 @@ public class UserProvisioningServiceTest {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
 
         assertThatThrownBy(() -> provisioningService.ensureUsable(token))
-                .isInstanceOf(AccountNotActiveException.class);
+                .isInstanceOf(AccountDeletedException.class);
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
         verify(userRepository, never()).syncEmail(any(), any());
         verifyNoInteractions(outboxService);

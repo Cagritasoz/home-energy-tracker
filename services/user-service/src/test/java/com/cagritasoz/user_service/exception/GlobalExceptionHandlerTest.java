@@ -54,14 +54,16 @@ class GlobalExceptionHandlerTest {
         assertThat(problemDetail.getDetail()).isEqualTo("Request conflicts with existing data.");
     }
 
+    // 410 Gone, not 403: the token is fine, the account behind it is DELETING or DELETED (one exception for both).
     @Test
-    void handleAccountNotActiveException_returns403WithMessage() {
-        ProblemDetail problemDetail = handler.handleAccountNotActiveException(new AccountNotActiveException());
+    void handleAccountDeletedException_returns410WithMessage() {
+        ProblemDetail problemDetail = handler.handleAccountDeletedException(new AccountDeletedException());
 
-        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.FORBIDDEN.value());
-        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/account-not-active");
-        assertThat(problemDetail.getTitle()).isEqualTo("Account not active");
-        assertThat(problemDetail.getDetail()).isEqualTo("Account is not active.");
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.GONE.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/account-deleted");
+        assertThat(problemDetail.getTitle()).isEqualTo("Account deleted");
+        assertThat(problemDetail.getDetail()).isEqualTo("Account has been deleted or is being deleted.");
+        assertThat(problemDetail.getProperties()).containsKey("timestamp");
 
     }
 

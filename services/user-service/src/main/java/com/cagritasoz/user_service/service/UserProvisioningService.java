@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.service;
 
 import com.cagritasoz.user_service.entity.User;
-import com.cagritasoz.user_service.exception.AccountNotActiveException;
+import com.cagritasoz.user_service.exception.AccountDeletedException;
 import com.cagritasoz.user_service.exception.EmailNotVerifiedException;
 import com.cagritasoz.user_service.exception.MissingIdentityClaimException;
 import com.cagritasoz.user_service.model.UserStatus;
@@ -33,7 +33,7 @@ public class UserProvisioningService {
 
         if(user.getStatus() != UserStatus.ACTIVE) { // Reject tokens that have outlived the accounts' usability.
 
-            throw new AccountNotActiveException();
+            throw new AccountDeletedException();
 
         }
 

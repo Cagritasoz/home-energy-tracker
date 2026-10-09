@@ -60,12 +60,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     // The three below are thrown by the provisioning interceptor. The token itself is valid
     // (otherwise Spring Security would have answered 401), it just can't be used here.
-    // TODO: Evaluate whether it would be better to make these custom exceptions extend AccessDeniedException. See comment below for Exception.class
-    @ExceptionHandler(AccountNotActiveException.class)
-    public ProblemDetail handleAccountNotActiveException(AccountNotActiveException e) {
-        return problem(HttpStatus.FORBIDDEN, "account-not-active", "Account not active", e.getMessage());
+    //
+    // The account is DELETI
+    //G or DELETED: 410 Gone, not 403. Nothing is being forbidden to this user - the
+    // resource they are asking about no longer exists - so this is not an access-denied case and does not
+    // belong under the TODO on the two handlers after it.
+    @ExceptionHandler(AccountDeletedException.class)
+    public ProblemDetail handleAccountDeletedException(AccountDeletedException e) {
+        return problem(HttpStatus.GONE, "account-deleted", "Account deleted", e.getMessage());
     }
 
+    // TODO: Evaluate whether it would be better to make these two custom exceptions extend AccessDeniedException. See comment below for Exception.class
     @ExceptionHandler(EmailNotVerifiedException.class)
     public ProblemDetail handleEmailNotVerifiedException(EmailNotVerifiedException e) {
         return problem(HttpStatus.FORBIDDEN, "email-not-verified", "Email not verified", e.getMessage());
