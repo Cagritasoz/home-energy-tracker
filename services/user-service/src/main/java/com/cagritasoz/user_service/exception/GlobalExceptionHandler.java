@@ -61,8 +61,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // The three below are thrown by the provisioning interceptor. The token itself is valid
     // (otherwise Spring Security would have answered 401), it just can't be used here.
     //
-    // The account is DELETI
-    //G or DELETED: 410 Gone, not 403. Nothing is being forbidden to this user - the
+    //
+    // The account is DELETING or DELETED: 410 Gone, not 403. Nothing is being forbidden to this user - the
     // resource they are asking about no longer exists - so this is not an access-denied case and does not
     // belong under the TODO on the two handlers after it.
     @ExceptionHandler(AccountDeletedException.class)
