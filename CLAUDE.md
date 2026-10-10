@@ -199,4 +199,6 @@ Target: blueprint §10 (test matrix §10.2, what each type must prove §10.3, se
 
 **Never let this file go stale.** When code, a design decision or a plan diverges from what is written here, update CLAUDE.md in the same change. When an open deviation is decided, move it to "Decided" (or delete it if the blueprint's version was adopted and is now implemented).
 
+The root `README.md` carries the service status table, user-service's API/events summary and the run instructions; update those when a service changes state, an endpoint or event is added, or the run steps change.
+
 A separate running list of production-readiness gaps is kept in Claude's project memory — surface it only when the user asks.
