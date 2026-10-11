@@ -37,10 +37,10 @@ The owner of "who is this user". It is the only service that talks to the identi
 
 ### What it does
 
-- **Identity comes from Keycloak.** There is no sign-up or password code here. The service is an OAuth2 resource server and validates the JWT: issuer, audience (`aud` must contain `user-service`) and realm roles (`USER`, `ADMIN`).
-- **Just-in-time provisioning.** The first authenticated request from a user creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. A verified email change in Keycloak is picked up on the next request and emits `UserUpdated`.
+- **Identity comes from Keycloak.** There is no sign-up or password code here. The service is an OAuth2 resource server and validates the JWT: issuer, audience (`aud` must contain `user-service`) and realm roles (`user`, `admin`).
+- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. A verified email change in Keycloak is picked up on the next request and emits `UserUpdated`.
 - **Self-service API.** View and update your profile, request deletion of your account.
-- **Admin API.** Paged read-only listing of users.
+- **Admin API.** Paged read-only listing of users, for staff accounts (role `admin`). An admin is an identity in Keycloak only: admins have no row in the `users` table and cause no events, and calling the customer API with an admin token returns `403`.
 - **Account deletion** is a multi-service saga (choreography, no central orchestrator). `DELETE /me` moves the account to `DELETING` and emits `UserDeletionRequested`. The remaining steps (Keycloak disable and delete, device cleanup, scrubbing personal data) are not implemented yet. Any account that is not `ACTIVE` gets `410 Gone` on every endpoint.
 - **Errors are RFC 9457 problem details**, with a stable `type`, `status`, `detail`, `instance` and `timestamp`. That includes 401 and 403 responses from the security layer.
 
@@ -48,11 +48,11 @@ The owner of "who is this user". It is the only service that talks to the identi
 
 | Method | Path | Role | What |
 |---|---|---|---|
-| `GET` | `/api/v1/users/me` | any authenticated | Own profile. Creates the account on first call. |
-| `PATCH` | `/api/v1/users/me` | any authenticated | Update `displayName` (≤ 100 chars) and/or `timezone` (a valid Java zone id like `Europe/Istanbul`). Optimistic locking returns `409` on a conflicting edit. |
-| `DELETE` | `/api/v1/users/me` | any authenticated | Start account deletion. Returns `202`, idempotent. |
-| `GET` | `/api/v1/admin/users` | `ADMIN` | Paged list (`page`, `size` ≤ 100). |
-| `GET` | `/api/v1/admin/users/{id}` | `ADMIN` | One user, including lifecycle fields. |
+| `GET` | `/api/v1/users/me` | `user` | Own profile. Creates the account on first call. |
+| `PATCH` | `/api/v1/users/me` | `user` | Update `displayName` (≤ 100 chars) and/or `timezone` (a valid Java zone id like `Europe/Istanbul`). Optimistic locking returns `409` on a conflicting edit. |
+| `DELETE` | `/api/v1/users/me` | `user` | Start account deletion. Returns `202`, idempotent. |
+| `GET` | `/api/v1/admin/users` | `admin` | Paged list (`page`, `size` ≤ 100). |
+| `GET` | `/api/v1/admin/users/{id}` | `admin` | One user, including lifecycle fields. |
 | `GET` | `/actuator/health` | public | Health. |
 
 A user can only ever reach their own row: identity comes from the token's `sub`, never from the URL or the body.
@@ -126,8 +126,8 @@ The realm has two seeded dev users:
 
 | User | Password | Role |
 |---|---|---|
-| `testuser@example.com` | `Testpassword1` | `USER` |
-| `admin@example.com` | `Adminpassword1` | `ADMIN` |
+| `testuser@example.com` | `Testpassword1` | `user` |
+| `admin@example.com` | `Adminpassword1` | `admin` |
 
 ```powershell
 # PowerShell: the helper script prints an access token (valid 5 minutes)

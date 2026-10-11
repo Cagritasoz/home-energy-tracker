@@ -35,7 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // Same standalone-MockMvc approach as UserControllerTest (see the comment there for what that does
-// and doesn't include). One gap specific to this controller: @PreAuthorize("hasRole('ADMIN')") and
+// and doesn't include). One gap specific to this controller: @PreAuthorize("hasRole('admin')") and
 // SecurityConfig's URL rule for /api/v1/admin/** are NOT exercised here - method security and the
 // filter chain only exist inside a real security-enabled Spring context, so nothing in this class
 // can prove a non-admin is turned away. That needs a heavier test later.

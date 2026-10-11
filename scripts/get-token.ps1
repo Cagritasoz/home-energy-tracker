@@ -15,8 +15,8 @@
     when a request starts returning 401.
 
 .PARAMETER Role
-    user  -> testuser@example.com (realm role USER)
-    admin -> admin@example.com    (realm roles USER and ADMIN)
+    user  -> testuser@example.com (realm role user)
+    admin -> admin@example.com    (realm role admin only; it is a staff account and gets 403 on /api/v1/users/**)
 
 .PARAMETER Copy
     Also copies the token to the clipboard.

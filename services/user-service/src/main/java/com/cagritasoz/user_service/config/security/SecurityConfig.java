@@ -66,9 +66,9 @@ public class SecurityConfig {
                         // and nothing under /actuator should ever be open-ended public.
                         .requestMatchers("/actuator/health").permitAll()
 
-                        .requestMatchers("/api/v1/users/me").authenticated()
+                        .requestMatchers("/api/v1/users/**").hasRole("user")
 
-                        .requestMatchers("/api/v1/admin/users/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/admin/users/**").hasRole("admin")
 
                         .anyRequest().authenticated()) // Every other request still needs authentication.
 
