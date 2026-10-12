@@ -1,12 +1,16 @@
 package com.cagritasoz.user_service.exception;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
+
+import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -44,24 +48,49 @@ class GlobalExceptionHandlerTest {
 
     // Kept deliberately generic - the message must never reveal which constraint or value
     // clashed (see the handler's own comment) - so asserting the exact detail text here IS the
-    // point, not an incidental check.
+    // point, not an incidental check. The SQLState sits on the cause, as it does for real Postgres errors.
     @Test
-    void handleDataIntegrityViolationException_returnsGenericConflictMessage() {
+    void handleDataIntegrityViolationException_uniqueViolation_returns409WithGenericMessage() {
         ProblemDetail problemDetail = handler.handleDataIntegrityViolationException(
-                new DataIntegrityViolationException("duplicate key value violates unique constraint \"uq_users_email\""));
+                new DataIntegrityViolationException("could not execute statement",
+                        new SQLException("duplicate key value violates unique constraint \"uq_users_email\"", "23505")));
 
         assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.CONFLICT.value());
         assertThat(problemDetail.getDetail()).isEqualTo("Request conflicts with existing data.");
     }
 
-    @Test
-    void handleAccountNotActiveException_returns403WithMessage() {
-        ProblemDetail problemDetail = handler.handleAccountNotActiveException(new AccountNotActiveException());
+    // 23502 = NOT NULL, 23503 = foreign key, 23514 = CHECK: our own code wrote something the schema refuses,
+    // not a client conflict.
+    @ParameterizedTest
+    @ValueSource(strings = {"23502", "23503", "23514"})
+    void handleDataIntegrityViolationException_otherViolation_returns500WithoutLeakingCause(String sqlState) {
+        ProblemDetail problemDetail = handler.handleDataIntegrityViolationException(
+                new DataIntegrityViolationException("could not execute statement",
+                        new SQLException("violates constraint \"chk_users_email\"", sqlState)));
 
-        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.FORBIDDEN.value());
-        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/account-not-active");
-        assertThat(problemDetail.getTitle()).isEqualTo("Account not active");
-        assertThat(problemDetail.getDetail()).isEqualTo("Account is not active.");
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/internal-error");
+        assertThat(problemDetail.getDetail()).isEqualTo("An unexpected error occurred.");
+    }
+
+    @Test
+    void handleDataIntegrityViolationException_noSqlExceptionInCauseChain_returns500() {
+        ProblemDetail problemDetail = handler.handleDataIntegrityViolationException(
+                new DataIntegrityViolationException("unique constraint, but no SQLState to prove it"));
+
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR.value());
+    }
+
+    // 410 Gone, not 403: the token is fine, the account behind it is DELETING or DELETED (one exception for both).
+    @Test
+    void handleAccountDeletedException_returns410WithMessage() {
+        ProblemDetail problemDetail = handler.handleAccountDeletedException(new AccountDeletedException());
+
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.GONE.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/account-deleted");
+        assertThat(problemDetail.getTitle()).isEqualTo("Account deleted");
+        assertThat(problemDetail.getDetail()).isEqualTo("Account has been deleted or is being deleted.");
+        assertThat(problemDetail.getProperties()).containsKey("timestamp");
 
     }
 

@@ -43,11 +43,11 @@
 "roles": {
 "realm": [
 {
-"name": "USER",
+"name": "user",
 "description": "Standard application user"
 },
 {
-"name": "ADMIN",
+"name": "admin",
 "description": "Administrative access to all user records"
 },
 {
@@ -55,7 +55,7 @@
 "description": "Roles granted automatically to every new user",
 "composite": true,
 "composites": {
-"realm": ["offline_access", "uma_authorization", "USER"],
+"realm": ["offline_access", "uma_authorization", "user"],
 "client": {
 "account": ["view-profile", "manage-account"]
 }
@@ -141,7 +141,7 @@
 "enabled": true,
 "firstName": "Admin",
 "lastName": "User",
-"realmRoles": ["default-roles-energy-tracker", "ADMIN"],
+"realmRoles": ["admin"],
 "credentials": [
 {
 "type": "password",

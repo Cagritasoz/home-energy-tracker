@@ -10,7 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
@@ -35,7 +35,10 @@ public class ProblemDetailAuthenticationEntryPoint implements AuthenticationEntr
         problemDetail.setType(URI.create("https://home-energy-tracker/problems/unauthorized"));
 
         problemDetail.setTitle("Unauthorized");
-        problemDetail.setDetail(authException instanceof InvalidBearerTokenException
+
+        boolean invalidToken = authException instanceof OAuth2AuthenticationException;
+
+        problemDetail.setDetail(invalidToken
                 // BearerTokenAuthenticationFilter validation failed should get this detail.
                 ? "The access token is expired, malformed, or not valid for this service."
                 // Missing token should get this detail.
@@ -45,7 +48,9 @@ public class ProblemDetailAuthenticationEntryPoint implements AuthenticationEntr
 
         problemDetail.setProperty("timestamp", Instant.now().toString());
 
-        response.addHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"energy-tracker\"");
+        response.addHeader(HttpHeaders.WWW_AUTHENTICATE, invalidToken
+                ? "Bearer realm=\"energy-tracker\", error=\"invalid_token\""
+                : "Bearer realm=\"energy-tracker\"");
 
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
 

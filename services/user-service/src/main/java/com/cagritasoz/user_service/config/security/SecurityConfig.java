@@ -16,10 +16,12 @@ import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.*;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.util.List;
@@ -39,12 +41,15 @@ public class SecurityConfig {
     @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
     private String issuerUri;
 
+    @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}")
+    private String jwkSetUri;
+
     @Value("${app.security.required-audience}")
     private String requiredAudience;
 
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, ObjectMapper objectMapper) throws Exception {
 
         http
                 .csrf(AbstractHttpConfigurer::disable)
@@ -66,9 +71,9 @@ public class SecurityConfig {
                         // and nothing under /actuator should ever be open-ended public.
                         .requestMatchers("/actuator/health").permitAll()
 
-                        .requestMatchers("/api/v1/users/me").authenticated()
+                        .requestMatchers("/api/v1/users/**").hasRole("user")
 
-                        .requestMatchers("/api/v1/admin/users/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/admin/**").hasRole("admin")
 
                         .anyRequest().authenticated()) // Every other request still needs authentication.
 
@@ -77,6 +82,8 @@ public class SecurityConfig {
                                 .decoder(jwtDecoder())
                                 .jwtAuthenticationConverter(jwtAuthenticationConverter()))
                         .authenticationEntryPoint(authenticationEntryPoint)) // Handle jwt related validation exceptions.
+
+                .addFilterBefore(new TokenVerificationUnavailableFilter(objectMapper), BearerTokenAuthenticationFilter.class)
 
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(authenticationEntryPoint) // Handles missing token case.
@@ -89,7 +96,11 @@ public class SecurityConfig {
     @Bean
     public JwtDecoder jwtDecoder() {
 
-        NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
+        // fromIssuerLocation() called Keycloak while the bean was being built.
+        // Keycloak down = bean creation failed and service could not start.
+        // withJwkSetUri() no call to Keycloak is made in startup.
+        // First request with token fetches the keys and caches them.
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
 
         OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
 
@@ -111,7 +122,7 @@ public class SecurityConfig {
 
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
 
-        // Plug in custom keycloak realm role converter in.
+        // Plug in the custom keycloak realm role converter.
         converter.setJwtGrantedAuthoritiesConverter(roleConverter);
 
         converter.setPrincipalClaimName(JwtClaimNames.SUB);

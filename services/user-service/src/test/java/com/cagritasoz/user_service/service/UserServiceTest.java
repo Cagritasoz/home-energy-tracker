@@ -3,7 +3,9 @@ package com.cagritasoz.user_service.service;
 import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.entity.User;
+import com.cagritasoz.user_service.exception.AccountDeletedException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
+import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
 import org.junit.jupiter.api.Test;
@@ -127,6 +129,20 @@ class UserServiceTest {
 
         // The whole point of the no-op case: an unchanged save must not announce a change that
         // never happened.
+        verifyNoInteractions(outboxService);
+    }
+
+    // The race: PATCH passed the interceptor while ACTIVE, DELETE then committed, and only now does updateUser read the row.
+    @Test
+    void updateUser_deletingAccount_throwsAccountDeletedAndWritesNothing() {
+        when(userRepository.findById(USER_ID))
+                .thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).status(UserStatus.DELETING).build()));
+
+        assertThatThrownBy(() -> userService.updateUser(USER_ID,
+                UpdateUserRequest.builder().displayName(UserFixtures.LEON_KENNEDY_NAME).build()))
+                .isInstanceOf(AccountDeletedException.class);
+
+        verify(userRepository, never()).saveAndFlush(any());
         verifyNoInteractions(outboxService);
     }
 
