@@ -10,7 +10,7 @@
     Uses the "local-dev" client's direct access grant (username + password straight to the token
     endpoint, no browser). The credentials are the throwaway ones seeded by
     infra/keycloak/realm-energy.json, so they are only valid against the local docker compose
-    Keycloak. Needs `127.0.0.1 keycloak` in the hosts file, the same host name the tokens are
+    Keycloak. The token endpoint is on localhost:8080, the same address the tokens are
     issued for. Access tokens live 5 minutes (accessTokenLifespan in the realm), so run this again
     when a request starts returning 401.
 
@@ -27,7 +27,7 @@
 
 .EXAMPLE
     $token = .\scripts\get-token.ps1
-    Invoke-RestMethod http://localhost:8080/api/v1/users/me -Headers @{ Authorization = "Bearer $token" }
+    Invoke-RestMethod http://localhost:8081/api/v1/users/me -Headers @{ Authorization = "Bearer $token" }
 
 .EXAMPLE
     .\scripts\get-token.ps1
@@ -36,7 +36,7 @@ param(
     [ValidateSet("user", "admin")]
     [string]$Role = "user",
 
-    [string]$KeycloakUrl = "http://keycloak:8180",
+    [string]$KeycloakUrl = "http://localhost:8080",
 
     [switch]$Copy
 )

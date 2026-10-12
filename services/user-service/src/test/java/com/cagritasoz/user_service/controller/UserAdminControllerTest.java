@@ -35,10 +35,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // Same standalone-MockMvc approach as UserControllerTest (see the comment there for what that does
-// and doesn't include). One gap specific to this controller: @PreAuthorize("hasRole('admin')") and
-// SecurityConfig's URL rule for /api/v1/admin/** are NOT exercised here - method security and the
-// filter chain only exist inside a real security-enabled Spring context, so nothing in this class
-// can prove a non-admin is turned away. That needs a heavier test later.
+// and doesn't include). @PreAuthorize and SecurityConfig's URL rule for /api/v1/admin/** need the real
+// filter chain, so they are covered by the tests in the security package (SecurityAuthorizationTest, MethodSecurityTest).
 @ExtendWith(MockitoExtension.class)
 public class UserAdminControllerTest {
 

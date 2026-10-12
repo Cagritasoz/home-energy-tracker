@@ -3,7 +3,9 @@ package com.cagritasoz.user_service.service;
 import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.entity.User;
+import com.cagritasoz.user_service.exception.AccountDeletedException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
+import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,13 @@ public class UserService {
     public UserResponse updateUser(UUID id, UpdateUserRequest request) {
 
         User user = findUser(id);
+
+        // The interceptor's ACTIVE check committed before this transaction began; a DELETE can land in between.
+        if (user.getStatus() != UserStatus.ACTIVE) {
+
+            throw new AccountDeletedException();
+
+        }
 
         Long versionBefore = user.getVersion();
 

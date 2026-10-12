@@ -14,6 +14,8 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @RequiredArgsConstructor
 public class UserProvisioningInterceptor implements HandlerInterceptor {
 
+    private static final String CUSTOMER_AUTHORITY = "ROLE_user";
+
     private final UserProvisioningService provisioningService;
 
     @Override
@@ -21,10 +23,12 @@ public class UserProvisioningInterceptor implements HandlerInterceptor {
                              @NonNull HttpServletResponse response,
                              @NonNull Object handler) {
 
-        // Execution up to this point guarantees that this check is always true.
-        if(SecurityContextHolder.getContext().getAuthentication() instanceof JwtAuthenticationToken authToken) {
+        // Only a customer is ever provisioned. This does not rely on the URL rules having rejected other roles first:
+        // this interceptor runs before method security, so a token without the user role must be skipped here.
+        if(SecurityContextHolder.getContext().getAuthentication() instanceof JwtAuthenticationToken authToken
+                && authToken.getAuthorities().stream().anyMatch(a -> CUSTOMER_AUTHORITY.equals(a.getAuthority()))) {
 
-            // TODO: Provisioning check for every single request could be a bottleneck.
+            // TODO: Provisioning check for every single request for user API could be a bottleneck.
             provisioningService.ensureUsable(authToken.getToken());
 
         }

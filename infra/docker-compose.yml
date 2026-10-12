@@ -165,7 +165,7 @@ services:
     image: quay.io/keycloak/keycloak:26.7.3
     container_name: keycloak
     ports:
-      - "8180:8180" # Main HTTP. Same number both sides — see KC_HTTP_PORT.
+      - "8080:8080" # Main HTTP (Keycloak's default port).
       - "9000:9000" # Management. Convenient in dev; NEVER exposed publicly.
     depends_on:
       keycloak-db:
@@ -197,21 +197,16 @@ services:
       # ── Networking / issuer identity ──
       KC_HTTP_ENABLED: "true"    # DEV ONLY — plain HTTP. Production: HTTPS only.
 
-      # Listen on 8180 INSIDE the container too, so one hostname:port works
-      # identically from the host and from other containers.
-      KC_HTTP_PORT: "8180"
-
       # Pins the advertised base URL: the `iss` claim in every token and the
       # `issuer` in the discovery document. Without this, Keycloak infers it
-      # from the Host header, and issuer mismatches could happen (401s) depending on
-      # which address the caller used.
-      #
-      # REQUIRED on host machine — add to /etc/hosts:
-      #     127.0.0.1   keycloak
-      # Then http://keycloak:8180 works from browser, Postman, IDE and containers.
+      # from the Host header, and the issuer would differ depending on which
+      # address the caller used (401s). This only fixes what Keycloak ADVERTISES;
+      # it does not change where it can be reached. From the host that is
+      # localhost:8080; from another container on this compose network it is
+      # http://keycloak:8080, and tokens still carry the localhost issuer.
       #
       # Production: KC_HOSTNAME: https://auth.example.com
-      KC_HOSTNAME: http://keycloak:8180
+      KC_HOSTNAME: http://localhost:8080
 
       # ── Observability ──
       # Exposes /health, /health/ready, /health/live on the MANAGEMENT port
@@ -225,8 +220,8 @@ services:
     healthcheck:
       # No curl/wget in the Keycloak image - open a raw TCP connection to the health endpoint via
       # bash's /dev/tcp instead (the same trick as an actual HTTP client, just without one installed).
-      # Port 9000, not 8180: health endpoints live on the separate MANAGEMENT port (KC_HEALTH_ENABLED
-      # above), never the main HTTP port - this was still checking the old pre-KC_HTTP_PORT default.
+      # Port 9000, not 8080: health endpoints live on the separate MANAGEMENT port (KC_HEALTH_ENABLED
+      # above), never the main HTTP port.
       test: [ "CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '\"status\": \"UP\"' <&3" ]
       interval: 10s
       timeout: 5s

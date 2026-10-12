@@ -196,6 +196,23 @@ class UserControllerTest {
         verify(userService, never()).updateUser(any(), any());
     }
 
+    @Test
+    void updateMe_emailInBody_returns400() throws Exception {
+
+        UpdateUserRequest request = UpdateUserRequest.builder()
+                .email("new@example.com")
+                .build();
+
+        mockMvc.perform(patch("/api/v1/users/me")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.email").value("cannot be changed here"))
+                .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/validation-failed"));
+
+        verify(userService, never()).updateUser(any(), any());
+    }
+
     // Tests globalExceptionHandler.handleHttpMessageNotReadable method.
     @Test
     void updateMe_malformedJson_returns400() throws Exception {

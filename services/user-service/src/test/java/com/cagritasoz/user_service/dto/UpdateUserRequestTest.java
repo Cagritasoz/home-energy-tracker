@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.dto;
 
+import com.cagritasoz.user_service.testsupport.UserFixtures;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -53,6 +54,18 @@ class UpdateUserRequestTest {
                 .build();
 
         assertThat(validator.validate(request)).isEmpty();
+    }
+
+    @Test
+    void email_isRejectedWhenSent() {
+        UpdateUserRequest request = UpdateUserRequest.builder().email(UserFixtures.ARTHUR_MORGAN_EMAIL).build();
+
+        Set<ConstraintViolation<UpdateUserRequest>> violations = validator.validate(request);
+
+        assertThat(violations).hasSize(1);
+        ConstraintViolation<UpdateUserRequest> violation = violations.iterator().next();
+        assertThat(violation.getPropertyPath()).hasToString("email");
+        assertThat(violation.getMessage()).isEqualTo("cannot be changed here");
     }
 
     @Test

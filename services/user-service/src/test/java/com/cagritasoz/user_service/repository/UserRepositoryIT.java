@@ -19,6 +19,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -417,7 +418,9 @@ class UserRepositoryIT {
 
         assertThatThrownBy(() -> userRepository.insertIgnoringConflict(newId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
                 .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("uq_users_email");
+                .hasMessageContaining("uq_users_email")
+                .rootCause().isInstanceOfSatisfying(SQLException.class,
+                        cause -> assertThat(cause.getSQLState()).isEqualTo("23505"));
 
     }
 
@@ -447,7 +450,9 @@ class UserRepositoryIT {
 
         assertThatThrownBy(() -> userRepository.insertIgnoringConflict(newId, invalidEmail, UserFixtures.ARTHUR_MORGAN_NAME))
                 .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("chk_users_email");
+                .hasMessageContaining("chk_users_email")
+                .rootCause().isInstanceOfSatisfying(SQLException.class,
+                        cause -> assertThat(cause.getSQLState()).isEqualTo("23514"));
 
     }
 

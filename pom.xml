@@ -200,6 +200,41 @@
 			</modules>
 		</profile>
 
+		<!-- "./mvnw verify -Pcoverage" records which lines and branches the tests (Surefire and Failsafe) execute and writes
+		     an HTML report per module to target/site/jacoco/index.html. Off by default so normal builds stay fast.
+		     prepare-agent attaches the JaCoCo agent to the forked test JVMs through the "argLine" property; the report is
+		     bound after the integration tests have run so the integration test coverage is included. -->
+		<profile>
+			<id>coverage</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.jacoco</groupId>
+						<artifactId>jacoco-maven-plugin</artifactId>
+						<version>0.8.13</version>
+						<executions>
+
+							<execution>
+								<id>jacoco-prepare-agent</id>
+								<goals>
+									<goal>prepare-agent</goal>
+								</goals>
+							</execution>
+
+							<execution>
+								<id>jacoco-report</id>
+								<phase>post-integration-test</phase>
+								<goals>
+									<goal>report</goal>
+								</goals>
+							</execution>
+
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
 	</profiles>
 
 </project>

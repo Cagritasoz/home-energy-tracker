@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.dto;
 
 import com.cagritasoz.user_service.validation.ValidTimezone;
+import jakarta.validation.constraints.Null;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Builder;
@@ -9,7 +10,7 @@ import lombok.Builder;
 // null both mean "leave unchanged" - a plain record can't tell them apart, and it doesn't matter
 // here because neither column is nullable, so there is nothing a null could legitimately clear.
 // An empty body {} is therefore a valid no-op.
-// Only fields the account owner may change live here: email is owned by Keycloak, and
+// Only fields the account owner may change live here (plus email, declared only to reject it);
 // id/status/timestamps are server-managed.
 @Builder
 public record UpdateUserRequest(
@@ -26,7 +27,11 @@ public record UpdateUserRequest(
         // ZoneId.getAvailableZoneIds() (exact, case-sensitive spelling, e.g. "Europe/Istanbul"); like the
         // constraints above, @ValidTimezone only fires when the client actually sent a value.
         @ValidTimezone
-        String timezone
+        String timezone,
+
+        // Owned by Keycloak: declared only so a request that sends it is rejected instead of silently ignored.
+        @Null(message = "cannot be changed here")
+        String email
 
 ) {
 

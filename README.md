@@ -18,7 +18,7 @@ Smart meters and plugs report how much energy they have used. This system ingest
 
 | Service | Purpose | Port | Status |
 |---|---|---|---|
-| **user-service** | User accounts, profile, GDPR-style account deletion, user events | 8080 | **Implemented**, see below. Account deletion is partly done |
+| **user-service** | User accounts, profile, GDPR-style account deletion, user events | 8081 | **Implemented**, see below. Account deletion is partly done |
 | device-service | Device registry, per-device tokens, device events | 8081 | Prototype exists, **to be rebuilt next** |
 | ingestion-service | Receives readings from devices and publishes them to Kafka | 8082 | Prototype exists, to be rebuilt |
 | usage-service | Turns readings into consumption data in InfluxDB | 8083 | Prototype exists, to be rebuilt |
@@ -27,7 +27,7 @@ Smart meters and plugs report how much energy they have used. This system ingest
 | ai-insight-service | AI explanations of consumption, via read-only tools | planned | Not yet implemented |
 | api-gateway | Single entry point: routing, auth, rate limiting (Spring Cloud Gateway) | planned | Not yet implemented |
 
-Ports are the current ones. They will be renumbered when the gateway arrives.
+The prototypes keep their old ports until they are rebuilt, so device-service (8081) cannot run next to user-service for now. Keycloak is on 8080.
 
 ---
 
@@ -86,9 +86,6 @@ The interesting parts of this service are in how it keeps its database and Kafka
 
 - **JDK 21** (the Maven wrapper is included, so no separate Maven install is needed)
 - **Docker** with Compose
-- A hosts-file entry `127.0.0.1 keycloak`. Tokens are issued for the issuer `http://keycloak:8180`, so the name has to resolve from your machine.
-  - Windows: add the line to `C:\Windows\System32\drivers\etc\hosts` (as administrator).
-  - Linux/macOS: add it to `/etc/hosts`.
 
 ### 1. Start the infrastructure
 
@@ -118,7 +115,7 @@ export USER_DB_PASSWORD=password
 ./mvnw -pl services/user-service -am spring-boot:run
 ```
 
-Flyway creates the schema on startup. The service listens on **http://localhost:8080**. Health check: http://localhost:8080/actuator/health.
+Flyway creates the schema on startup. The service listens on **http://localhost:8081**. Health check: http://localhost:8081/actuator/health.
 
 ### 3. Call it
 
@@ -132,18 +129,18 @@ The realm has two seeded dev users:
 ```powershell
 # PowerShell: the helper script prints an access token (valid 5 minutes)
 $token = .\scripts\get-token.ps1                 # or: -Role admin
-Invoke-RestMethod http://localhost:8080/api/v1/users/me -Headers @{ Authorization = "Bearer $token" }
+Invoke-RestMethod http://localhost:8081/api/v1/users/me -Headers @{ Authorization = "Bearer $token" }
 ```
 
 ```bash
 # any shell: ask Keycloak directly
-TOKEN=$(curl -s -X POST http://keycloak:8180/realms/energy-tracker/protocol/openid-connect/token \
+TOKEN=$(curl -s -X POST http://localhost:8080/realms/energy-tracker/protocol/openid-connect/token \
   -d grant_type=password -d client_id=local-dev -d client_secret=secret \
   -d username=testuser@example.com -d password=Testpassword1 | jq -r .access_token)
 
-curl -s http://localhost:8080/api/v1/users/me -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:8081/api/v1/users/me -H "Authorization: Bearer $TOKEN"
 
-curl -s -X PATCH http://localhost:8080/api/v1/users/me \
+curl -s -X PATCH http://localhost:8081/api/v1/users/me \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"displayName":"Arthur Morgan","timezone":"Europe/Istanbul"}'
 ```
@@ -181,6 +178,17 @@ Note that `--profile` goes before `down`. Without it the Kafka containers are le
 ./mvnw verify     # + integration tests against real containers (needs Docker)
 ```
 
+### Test coverage
+
+Coverage is measured with [JaCoCo](https://www.jacoco.org/jacoco/), behind an optional `coverage` Maven profile so normal builds stay fast:
+
+```bash
+./mvnw verify -Pcoverage                                    # every module
+./mvnw -pl services/user-service -am verify -Pcoverage      # one service
+```
+
+Open `services/user-service/target/site/jacoco/index.html` in a browser. Packages and classes are listed with line and branch coverage; click through to the source, where green lines ran, red lines never ran and yellow lines ran with some branch untaken. `jacoco.csv` in the same folder holds the raw numbers. The report includes both the unit tests and the integration tests, needs Docker like any `verify`, and is regenerated on every run (it lives in `target/`, which git ignores).
+
 Unit tests are named `*Test` and run in Surefire. Integration tests are named `*IT`, use [Testcontainers](https://testcontainers.com) and run in Failsafe. CI (GitHub Actions) runs `./mvnw verify` on every push.
 
 user-service has more than 200 test cases. Highlights:
@@ -190,7 +198,9 @@ user-service has more than 200 test cases. Highlights:
 - **Relay tests against real Postgres and Kafka**: a 120-row backlog drained in one tick, two instances competing for the advisory lock, the broker paused with `docker pause` (nothing marked as published, real cause stored, recovery in order, no payload in logs), and backoff timing checked with a fake clock.
 - Tests are *mutation-checked*: a test is only trusted after the code it covers has been deliberately broken and the test has failed.
 
-Not written yet: the HTTP security matrix, concurrency tests for the deletion saga, contract fixtures and end-to-end tests (the `e2e/` module is a stub).
+- **Security tests** against the real security configuration: real RS256-signed tokens with keys served from a local JWKS endpoint, a role matrix of 14 token shapes across every route, forged, unsigned, expired and wrong-audience tokens, CORS, method security in isolation, key rotation and key-endpoint outages, and an integration test proving an admin account never gets a user row or an event. The security classes have 100 % line and branch coverage.
+
+Not written yet: concurrency tests for the deletion saga, contract fixtures and end-to-end tests (the `e2e/` module is a stub).
 
 ---
 

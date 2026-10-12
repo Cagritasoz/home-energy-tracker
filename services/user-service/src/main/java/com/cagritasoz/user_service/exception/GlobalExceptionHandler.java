@@ -22,6 +22,7 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.net.URI;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -50,12 +51,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 "The resource was modified by another request. Please retry.");
     }
 
-    // A database constraint was violated, e.g. uq_users_email when provisioning a new account.
+    // Only a unique violation (e.g. uq_users_email when provisioning a new account) is a conflict the
+    // client caused. NOT NULL, CHECK or foreign key failures mean our own code wrote something invalid: 500.
     // Kept generic on purpose: the message must not reveal which value or constraint clashed.
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail handleDataIntegrityViolationException(DataIntegrityViolationException e) {
-        return problem(HttpStatus.CONFLICT, "data-conflict", "Data conflict",
-                "Request conflicts with existing data.");
+
+        if (isUniqueViolation(e)) {
+
+            return problem(HttpStatus.CONFLICT, "data-conflict", "Data conflict",
+                    "Request conflicts with existing data.");
+
+        }
+
+        log.error("Unexpected integrity violation", e);
+        return internalError();
     }
 
     // The three below are thrown by the provisioning interceptor. The token itself is valid
@@ -96,8 +106,27 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         }
 
         log.error("Unhandled exception", e);
+        return internalError();
+    }
+
+    private ProblemDetail internalError() {
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "internal-error", "Internal server error",
                 "An unexpected error occurred.");
+    }
+
+    // 23505 = unique_violation in PostgreSQL; the SQLException sits somewhere down the cause chain.
+    private static boolean isUniqueViolation(Throwable e) {
+
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+
+            if (cause instanceof SQLException sql && "23505".equals(sql.getSQLState())) {
+
+                return true;
+
+            }
+        }
+
+        return false;
     }
 
     @Override
