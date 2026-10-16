@@ -121,11 +121,31 @@ class SecurityAuthenticationTest extends SecuritySliceTest {
         call(Route.ME_GET, user().notBefore(Instant.now().plusSeconds(30)).bearer()).andExpect(status().isOk());
     }
 
+    // 1. An attacker has captured the kid of an existing key (it is readable in any token's header).
+    // 2. The attacker generates their own RSA key pair (RSAKey) under that kid and signs a token
+    //    with its private half.
+    // 3. The attacker sends a request with the signed token.
+    // 4. The decoder looks up that kid in its cached key set; on a cache miss it fetches the set from
+    //    the JWKS endpoint (LocalJwks here), then verifies the signature with the matching public half.
+    // 5. The attacker's private half is not the pair of the published public half -> invalid signature.
+    // Even though both keys share the same kid, they are not a matching public/private pair.
+    // Published keys may share a kid: every published key that matches the kid is tried in turn,
+    // and only if all of them fail is the token invalid.
     @Test
     void tokenSignedWithAnotherKeyUnderTheSameKeyId_isRejected() throws Exception {
         assertInvalidToken(user().signedWith(LocalJwks.ATTACKER_KEY).signed());
     }
 
+    // 1. The token is signed with the genuine private half of the published key (SIGNING_KEY, kid
+    //    "test-key-1"), but its header names a different kid: "unknown-key".
+    // 2. The decoder looks up "unknown-key" in its cached key set and finds nothing.
+    // 3. Assuming the issuer may have rotated its keys, it fetches the key set again from the JWKS
+    //    endpoint (LocalJwks here); the fresh set still holds only "test-key-1".
+    // 4. No published key matches the kid -> no public half to verify with -> invalid token.
+    // The signature would verify against SIGNING_KEY's public half, but the decoder never checks it:
+    // it only tries the keys the header's kid points to, never "every key it knows".
+    // A genuine signature is therefore not enough - the kid must also name the published key that
+    // verifies it.
     @Test
     void tokenWithUnknownKeyId_isRejected() throws Exception {
         assertInvalidToken(user().kid("unknown-key").signed());
@@ -136,6 +156,19 @@ class SecurityAuthenticationTest extends SecuritySliceTest {
         assertInvalidToken(user().unsigned());
     }
 
+    // Algorithm confusion attack (RS256 -> HS256).
+    // 1. RS256 is asymmetric: the private half signs, the public half verifies. HS256 is symmetric: one
+    //    shared secret both signs and verifies.
+    // 2. The public half is public by design, anyone can read it from the JWKS endpoint. The attacker
+    //    uses its bytes as if they were an HS256 secret (MACSigner in signedWithHmacUsingPublicKey)
+    //    and signs a token with it. The header says "alg": "HS256".
+    // 3. A naive verifier trusts the alg in the header: it sees HS256, takes "the key" (the published
+    //    public half) as the secret and recomputes the HMAC. It matches, because the attacker used
+    //    exactly those bytes -> the forged token would be accepted without the private key.
+    // 4. Here the decoder is built with a fixed expected algorithm (RS256, the default of
+    //    NimbusJwtDecoder.withJwkSetUri) and only looks for keys usable with it. The token's header
+    //    asks for HS256 -> no key qualifies -> the signature is never even checked -> invalid token.
+    // The algorithm is decided by our configuration, never by the token that is being verified.
     @Test
     void tokenSignedWithHmacUsingThePublicKey_isRejected() throws Exception {
         assertInvalidToken(user().signedWithHmacUsingPublicKey());
@@ -144,6 +177,8 @@ class SecurityAuthenticationTest extends SecuritySliceTest {
     @Test
     void tokenWithTamperedPayload_isRejected() throws Exception {
         String[] parts = user().signed().split("\\.");
+
+        // Forge the claims.
         String forged = TestTokens.admin(ADMIN_ID).signedWith(LocalJwks.ATTACKER_KEY).signed().split("\\.")[1];
 
         assertInvalidToken(parts[0] + "." + forged + "." + parts[2]);
