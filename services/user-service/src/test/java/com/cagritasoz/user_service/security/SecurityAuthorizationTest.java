@@ -137,6 +137,9 @@ class SecurityAuthorizationTest extends SecuritySliceTest {
     void trailingSlashOnCustomerRoute_isStillGuardedByTheRoleRule() throws Exception {
         assertForbidden(mockMvc.perform(get("/api/v1/users/me/")
                 .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer())));
+
+        // Security filters allow trailing slash with "/api/v1/admin/**", Auth succeeds.
+        // 404 is thrown in the MVC routing because MVC can not match /api/v1/users/me/ to /api/v1/users/me. Trailing slash matters.
         mockMvc.perform(get("/api/v1/users/me/").header(HttpHeaders.AUTHORIZATION, TestTokens.user(USER_ID).bearer()))
                 .andExpect(status().isNotFound());
         verifyNoInteractions(userService);
