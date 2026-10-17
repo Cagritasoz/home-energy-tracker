@@ -11,6 +11,6 @@ import lombok.Builder;
 @Builder
 public record UserDeletionRequestedData() {
 
-    // Shape version of this payload; goes into the envelope's schemaVersion. Bump only for a breaking change.
+    // Shape version of this payload; goes into the envelope's schemaVersion. Bumped only for a breaking change.
     public static final int SCHEMA_VERSION = 1;
 }
