@@ -72,7 +72,7 @@
 
 "clients": [
 {
-"clientId": "local-dev",
+"clientId": "energy-cli",
 "name": "Local dev / test-token client",
 "enabled": true,
 "protocol": "openid-connect",

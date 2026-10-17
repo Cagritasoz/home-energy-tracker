@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Gets a local-dev access token from Keycloak for the test user or the admin user.
+    Gets an energy-cli access token from Keycloak for the test user or the admin user.
 
 .NOTES
     If this fails with "cannot be loaded because running scripts is disabled on this system",
     run once: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 .DESCRIPTION
-    Uses the "local-dev" client's direct access grant (username + password straight to the token
+    Uses the "energy-cli" client's direct access grant (username + password straight to the token
     endpoint, no browser). The credentials are the throwaway ones seeded by
     infra/keycloak/realm-energy.json, so they are only valid against the local docker compose
     Keycloak. The token endpoint is on localhost:8080, the same address the tokens are
@@ -54,7 +54,7 @@ try {
     # A hashtable body is sent as application/x-www-form-urlencoded, which is what the token endpoint expects.
     $response = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body @{
         grant_type    = "password"
-        client_id     = "local-dev"
+        client_id     = "energy-cli"
         client_secret = "secret"
         username      = $credentials.username
         password      = $credentials.password

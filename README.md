@@ -135,7 +135,7 @@ Invoke-RestMethod http://localhost:8081/api/v1/users/me -Headers @{ Authorizatio
 ```bash
 # any shell: ask Keycloak directly
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/energy-tracker/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=local-dev -d client_secret=secret \
+  -d grant_type=password -d client_id=energy-cli -d client_secret=secret \
   -d username=testuser@example.com -d password=Testpassword1 | jq -r .access_token)
 
 curl -s http://localhost:8081/api/v1/users/me -H "Authorization: Bearer $TOKEN"
@@ -227,7 +227,7 @@ Consumes alert events and delivers them through a notification queue with retrie
 Natural-language insights about a user's consumption, built with Spring AI. The model gets **read-only tools** over usage data and cannot change anything.
 
 ### api-gateway (not yet implemented)
-Spring Cloud Gateway in front of everything: routing, JWT validation, rate limiting. It replaces the dev-only `local-dev` Keycloak client with proper `energy-ui` and `energy-cli` clients.
+Spring Cloud Gateway in front of everything: routing, JWT validation, rate limiting. It sits in front of the dev-only `energy-cli` Keycloak client with a proper UI client.
 
 ---
 
