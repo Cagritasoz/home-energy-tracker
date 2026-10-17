@@ -13,7 +13,5 @@ public record UserUpdatedData(
         String displayName,
         String timezone
 ) {
-
-    // Shape version of this payload; goes into the envelope's schemaVersion. Bump only for a breaking change.
     public static final int SCHEMA_VERSION = 1;
 }

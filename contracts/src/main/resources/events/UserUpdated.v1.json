@@ -1,0 +1,17 @@
+{
+  "eventId": "7c2d9e14-5a60-4b8f-9d31-e4f5a6b7c8d9",
+  "eventType": "UserUpdated",
+  "schemaVersion": 1,
+  "aggregateType": "User",
+  "aggregateId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+  "aggregateVersion": 3,
+  "occurredAt": "2026-02-01T00:00:05Z",
+  "correlationId": null,
+  "causationId": null,
+  "producer": "user-service",
+  "data": {
+    "email": "leon.kennedy@example.com",
+    "displayName": "Leon Kennedy",
+    "timezone": "Europe/Istanbul"
+  }
+}
