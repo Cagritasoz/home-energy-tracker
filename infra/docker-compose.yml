@@ -214,6 +214,21 @@ services:
       KC_HEALTH_ENABLED: 'true'
       KC_METRICS_ENABLED: "true"   # Prometheus endpoint on 9000.
       KC_LOG_LEVEL: info           # `debug` is preferred when diagnosing token problems.
+
+      # ── Mail ──
+      # The realm's SMTP server (realm-energy.json) is mailpit:1025 below; nothing to set here for that.
+      # The realm enables Keycloak's built-in "email" event listener to send "your password was changed" notices.
+      # That listener ignores the realm's own event-type list and, left alone, also mails the account owner on
+      # EVERY failed login ("Login error": anyone could mail-bomb a victim with wrong passwords) and sends a second
+      # "Update credential" mail per password change. This server-level option restricts it to password changes.
+      KC_SPI_EVENTS_LISTENER__EMAIL__INCLUDE_EVENTS: UPDATE_PASSWORD
+
+      # ── Secrets referenced by the realm import ──
+      # realm-energy.json contains the literal text ${USER_SERVICE_ADMIN_CLIENT_SECRET}; Keycloak replaces it with
+      # this environment variable while importing (an unset variable leaves the placeholder text in place, which
+      # would make the client secret that literal string). user-service reads the same variable when it calls
+      # Keycloak's admin API. Value: infra/.env (see .env.example).
+      USER_SERVICE_ADMIN_CLIENT_SECRET: ${USER_SERVICE_ADMIN_CLIENT_SECRET}
     volumes:
       # host-path:container-path:mode - :ro mounts it read-only, container can't modify your file.
       - ./keycloak/realm-energy.json:/opt/keycloak/data/import/realm-energy.json:ro
@@ -227,6 +242,24 @@ services:
       timeout: 5s
       retries: 15
       start_period: 60s
+
+  # Catches every mail the stack sends instead of delivering it: Keycloak's registration verification, password
+  # reset and password-changed mails today, notification-service's later. Open http://localhost:8025 to read them.
+  # No login, no TLS, no volume: messages live in memory and are gone after a restart, which is what a dev
+  # mailbox should do. Keycloak reaches it as mailpit:1025 on this compose network (the realm's SMTP host).
+  # Not a dependency of keycloak on purpose: Keycloak only talks to it when it sends a mail.
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    container_name: mailpit
+    ports:
+      - "8025:8025" # Web UI and REST API.
+      - "1025:1025" # SMTP.
+    healthcheck:
+      # The binary has a built-in readiness check (the image has no curl/wget): exit code 0 = ready.
+      test: [ "CMD", "/mailpit", "readyz" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   # Without name: a volume defaults to <project>_<key> (project = top-level name: above).
