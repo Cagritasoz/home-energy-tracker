@@ -95,7 +95,7 @@ cp .env.example .env          # local-only throwaway passwords; .env is gitignor
 docker compose --profile kafka up -d
 ```
 
-Compose starts three services by default: the Postgres database of user-service (`user-db`), the Postgres database of Keycloak (`keycloak-db`) and Keycloak itself, with a pre-seeded realm and two test users. `--profile kafka` adds a single-node Kafka (KRaft) with its topics, plus Kafka UI at http://localhost:8070. Wait until `docker compose ps` shows Keycloak as healthy. The first start takes a minute.
+Compose starts four services by default: the Postgres database of user-service (`user-db`), the Postgres database of Keycloak (`keycloak-db`), Keycloak itself, with a pre-seeded realm and two test users, and Mailpit, a mail catcher: every mail Keycloak sends (the verification mail of a new registration, password resets, password-changed notices) lands at http://localhost:8025 instead of being delivered. `.env` must also define `USER_SERVICE_ADMIN_CLIENT_SECRET` (copy the line from `.env.example` into an existing `.env`); Keycloak uses it for the admin client of user-service. `--profile kafka` adds a single-node Kafka (KRaft) with its topics, plus Kafka UI at http://localhost:8070. Wait until `docker compose ps` shows Keycloak as healthy. The first start takes a minute.
 
 With plain `docker compose up -d` (no profile) the service still works and serves its API, but events pile up in the outbox table until Kafka is available.
 
