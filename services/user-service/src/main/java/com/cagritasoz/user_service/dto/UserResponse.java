@@ -9,7 +9,7 @@ import java.util.UUID;
 // Jackson 3 orders record properties alphabetically by default and matches JSON keys to field
 // names verbatim (no snake_case conversion) - hence the explicit @JsonPropertyOrder below.
 // Self-service view (/users/me): only what the account owner needs. Lifecycle and saga fields
-// (status, version, devicesDeleted, ...) live on UserAdminResponse - a caller who can reach this
+// (status, version, the deletion timestamps, ...) live on UserAdminResponse - a caller who can reach this
 // endpoint is always ACTIVE anyway, and keeping internals out of the public contract leaves the
 // deletion saga free to change.
 @Builder

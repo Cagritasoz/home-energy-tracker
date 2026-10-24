@@ -25,11 +25,16 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     // No version check, only status = 'ACTIVE': a version check here would make this a silent no-op (no operation)
     // (requestDeletion() would still report success) whenever a concurrent update won the race first.
     // A row lock is released only at commit time of the transaction.
+    //
+    // Transitional until the grace period lands: an immediate deletion, so the row is requested, scheduled for
+    // and started at the same moment, which is what V11's checks require of a DELETING row.
     @Modifying(clearAutomatically = true)
     @Query(value = """
             UPDATE users
             SET status = 'DELETING',
                 deletion_requested_at = CURRENT_TIMESTAMP,
+                deletion_scheduled_for = CURRENT_TIMESTAMP,
+                deletion_started_at = CURRENT_TIMESTAMP,
                 version = version + 1
             WHERE id = :id AND status = 'ACTIVE'
             """, nativeQuery = true)

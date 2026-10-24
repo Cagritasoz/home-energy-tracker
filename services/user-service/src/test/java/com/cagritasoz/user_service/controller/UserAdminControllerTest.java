@@ -63,7 +63,6 @@ public class UserAdminControllerTest {
                 .timezone("UTC")
                 .status(UserStatus.ACTIVE)
                 .version(0L)
-                .devicesDeleted(false)
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .updatedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .build();
@@ -79,13 +78,13 @@ public class UserAdminControllerTest {
                 .timezone("UTC")
                 .status(UserStatus.DELETED)
                 .version(12L)
-                .devicesDeleted(true)
-                .keycloakDisabledAt(Instant.parse("2026-02-01T00:00:00Z"))
-                .deletionRequestedAt(Instant.parse("2026-01-31T23:58:42Z"))
-                .deletedAt(Instant.parse("2026-02-01T00:00:05Z"))
-                .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:09Z"))
+                .deletionRequestedAt(Instant.parse("2026-01-31T23:50:00Z"))
+                .deletionScheduledFor(Instant.parse("2026-01-31T23:55:00Z"))
+                .deletionStartedAt(Instant.parse("2026-01-31T23:58:42Z"))
+                .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:05Z"))
+                .deletedAt(Instant.parse("2026-02-01T00:01:09Z"))
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
-                .updatedAt(Instant.parse("2026-02-01T00:00:09Z"))
+                .updatedAt(Instant.parse("2026-02-01T00:01:09Z"))
                 .build();
     }
 
@@ -105,7 +104,8 @@ public class UserAdminControllerTest {
                 .andExpect(jsonPath("$.content", hasSize(1)))
                 .andExpect(jsonPath("$.content[0].id").value(USER_ID.toString()))
                 // A null column must still appear in the JSON as an explicit null, not be left out.
-                .andExpect(jsonPath("$.content[0].keycloakDisabledAt").value((Object) null))
+                .andExpect(jsonPath("$.content[0].deletionScheduledFor").value((Object) null))
+                .andExpect(jsonPath("$.content[0].deletionStartedAt").value((Object) null))
                 .andExpect(jsonPath("$.content[0].keycloakDeletedAt").value((Object) null))
                 .andExpect(jsonPath("$.page.size").value(20))
                 .andExpect(jsonPath("$.page.number").value(0))
@@ -193,7 +193,7 @@ public class UserAdminControllerTest {
 
     // Uses the DELETED variant so every column has a value. This is the admin view: unlike the
     // self-service response it exposes the whole deletion-saga state (status, version,
-    // devicesDeleted and the four saga timestamps), and Instants come out as ISO-8601 strings.
+    // the five saga timestamps), and Instants come out as ISO-8601 strings.
     @Test
     void getUser_existingId_returnsAllAdminFields() throws Exception {
 
@@ -207,13 +207,13 @@ public class UserAdminControllerTest {
                 .andExpect(jsonPath("$.timezone").value("UTC"))
                 .andExpect(jsonPath("$.status").value("DELETED"))
                 .andExpect(jsonPath("$.version").value(12))
-                .andExpect(jsonPath("$.devicesDeleted").value(true))
-                .andExpect(jsonPath("$.keycloakDisabledAt").value("2026-02-01T00:00:00Z"))
-                .andExpect(jsonPath("$.deletionRequestedAt").value("2026-01-31T23:58:42Z"))
-                .andExpect(jsonPath("$.deletedAt").value("2026-02-01T00:00:05Z"))
-                .andExpect(jsonPath("$.keycloakDeletedAt").value("2026-02-01T00:00:09Z"))
+                .andExpect(jsonPath("$.deletionRequestedAt").value("2026-01-31T23:50:00Z"))
+                .andExpect(jsonPath("$.deletionScheduledFor").value("2026-01-31T23:55:00Z"))
+                .andExpect(jsonPath("$.deletionStartedAt").value("2026-01-31T23:58:42Z"))
+                .andExpect(jsonPath("$.keycloakDeletedAt").value("2026-02-01T00:00:05Z"))
+                .andExpect(jsonPath("$.deletedAt").value("2026-02-01T00:01:09Z"))
                 .andExpect(jsonPath("$.createdAt").value("2026-01-01T00:00:00Z"))
-                .andExpect(jsonPath("$.updatedAt").value("2026-02-01T00:00:09Z"));
+                .andExpect(jsonPath("$.updatedAt").value("2026-02-01T00:01:09Z"));
 
         // The id in the URL is what reaches the service.
         verify(userAdminService).getUser(USER_ID);

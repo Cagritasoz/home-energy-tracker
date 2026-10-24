@@ -49,22 +49,23 @@ public final class UserFixtures {
                 .timezone("UTC")
                 .status(UserStatus.ACTIVE)
                 .version(0L)
-                .devicesDeleted(false)
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .updatedAt(Instant.parse("2026-01-01T00:00:00Z"));
     }
 
     // Builds on activeUser() rather than repeating every column - only what actually differs for
     // a DELETED account (the saga bookkeeping columns UserAdminResponse exposes) is overridden.
+    // The timeline is the real order: asked, grace period ends, cleanup starts (the promoter ran a little late),
+    // the Keycloak user is deleted, and the finaliser marks the row DELETED after its quiet period.
     public static User.UserBuilder deletedUser() {
         return activeUser()
                 .status(UserStatus.DELETED)
                 .version(12L)
-                .devicesDeleted(true)
-                .keycloakDisabledAt(Instant.parse("2026-02-01T00:00:00Z"))
-                .deletionRequestedAt(Instant.parse("2026-01-31T23:58:42Z"))
-                .deletedAt(Instant.parse("2026-02-01T00:00:05Z"))
-                .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:09Z"))
-                .updatedAt(Instant.parse("2026-02-01T00:00:09Z"));
+                .deletionRequestedAt(Instant.parse("2026-01-31T23:50:00Z"))
+                .deletionScheduledFor(Instant.parse("2026-01-31T23:55:00Z"))
+                .deletionStartedAt(Instant.parse("2026-01-31T23:58:42Z"))
+                .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:05Z"))
+                .deletedAt(Instant.parse("2026-02-01T00:01:09Z"))
+                .updatedAt(Instant.parse("2026-02-01T00:01:09Z"));
     }
 }

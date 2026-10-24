@@ -39,20 +39,22 @@ public class User {
     @Column(nullable = false)
     private Long version;
 
-    @Builder.Default
-    @Column(name = "devices_deleted", nullable = false)
-    private boolean devicesDeleted = false;
-
-    @Column(name = "keycloak_disabled_at")
-    private Instant keycloakDisabledAt;
-
+    // The deletion timestamps (V5, V9, V11): requested = the user asked, scheduled_for = when the grace period
+    // ends, started_at = when the cleanup began, deleted_at = when it finished. The database ties each one to the
+    // statuses that imply it.
     @Column(name = "deletion_requested_at")
     private Instant deletionRequestedAt;
+
+    @Column(name = "deletion_scheduled_for")
+    private Instant deletionScheduledFor;
+
+    @Column(name = "deletion_started_at")
+    private Instant deletionStartedAt;
 
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
-    // Set once the account is hard-deleted in Keycloak, the saga's last step (V9).
+    // Set once the Keycloak user is hard-deleted, which happens while the row is DELETING (V9, V12).
     @Column(name = "keycloak_deleted_at")
     private Instant keycloakDeletedAt;
 

@@ -120,7 +120,8 @@ class UserRepositoryIT {
 
         assertThat(loaded.getTimezone()).isEqualTo("UTC");
         assertThat(loaded.getStatus()).isEqualTo(UserStatus.ACTIVE);
-        assertThat(loaded.isDevicesDeleted()).isFalse();
+        assertThat(loaded.getDeletionScheduledFor()).isNull();
+        assertThat(loaded.getDeletionStartedAt()).isNull();
 
     }
 
@@ -340,11 +341,11 @@ class UserRepositoryIT {
         assertThat(loaded.getDisplayName()).isEqualTo(user.getDisplayName());
         assertThat(loaded.getTimezone()).isEqualTo(user.getTimezone());
         assertThat(loaded.getStatus()).isEqualTo(UserStatus.DELETED);
-        assertThat(loaded.isDevicesDeleted()).isTrue();
-        assertThat(loaded.getKeycloakDisabledAt()).isEqualTo(user.getKeycloakDisabledAt());
         assertThat(loaded.getDeletionRequestedAt()).isEqualTo(user.getDeletionRequestedAt());
-        assertThat(loaded.getDeletedAt()).isEqualTo(user.getDeletedAt());
+        assertThat(loaded.getDeletionScheduledFor()).isEqualTo(user.getDeletionScheduledFor());
+        assertThat(loaded.getDeletionStartedAt()).isEqualTo(user.getDeletionStartedAt());
         assertThat(loaded.getKeycloakDeletedAt()).isEqualTo(user.getKeycloakDeletedAt());
+        assertThat(loaded.getDeletedAt()).isEqualTo(user.getDeletedAt());
         assertThat(loaded.getVersion()).isZero();
         assertThat(loaded.getCreatedAt()).isEqualTo(timestampOf("created_at", loaded));
         assertThat(loaded.getUpdatedAt()).isEqualTo(timestampOf("updated_at", loaded));
@@ -372,11 +373,11 @@ class UserRepositoryIT {
         assertThat(user.getTimezone()).isEqualTo("UTC");
         assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
         assertThat(user.getVersion()).isZero();
-        assertThat(user.isDevicesDeleted()).isFalse();
-        assertThat(user.getKeycloakDisabledAt()).isNull();
         assertThat(user.getDeletionRequestedAt()).isNull();
-        assertThat(user.getDeletedAt()).isNull();
+        assertThat(user.getDeletionScheduledFor()).isNull();
+        assertThat(user.getDeletionStartedAt()).isNull();
         assertThat(user.getKeycloakDeletedAt()).isNull();
+        assertThat(user.getDeletedAt()).isNull();
         assertThat(user.getCreatedAt()).isNotNull();
         assertThat(user.getUpdatedAt()).isNotNull();
 
@@ -474,11 +475,12 @@ class UserRepositoryIT {
         assertThat(user.getTimezone()).isEqualTo("UTC");
         assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
         assertThat(user.getVersion()).isOne();
-        assertThat(user.isDevicesDeleted()).isFalse();
-        assertThat(user.getKeycloakDisabledAt()).isNull();
         assertThat(user.getDeletionRequestedAt()).isAfter(Instant.parse(YEAR_2000));
-        assertThat(user.getDeletedAt()).isNull();
+        // An immediate deletion: asked, scheduled and started in the same statement, so the same instant.
+        assertThat(user.getDeletionScheduledFor()).isEqualTo(user.getDeletionRequestedAt());
+        assertThat(user.getDeletionStartedAt()).isEqualTo(user.getDeletionRequestedAt());
         assertThat(user.getKeycloakDeletedAt()).isNull();
+        assertThat(user.getDeletedAt()).isNull();
         assertThat(user.getCreatedAt()).isEqualTo(Instant.parse(YEAR_2000));
         assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000));
 
@@ -712,12 +714,16 @@ class UserRepositoryIT {
 
         jdbc.update("""
                         INSERT INTO users
-                        (id, email, display_name, status, deletion_requested_at, deleted_at, created_at, updated_at)
+                        (id, email, display_name, status, deletion_requested_at, deletion_scheduled_for,
+                         deletion_started_at, deleted_at, created_at, updated_at)
                         VALUES
-                        (?, ?, ?, ?, ?::timestamptz, ?::timestamptz, ?::timestamptz, ?::timestamptz)
+                        (?, ?, ?, ?, ?::timestamptz, ?::timestamptz, ?::timestamptz, ?::timestamptz,
+                         ?::timestamptz, ?::timestamptz)
                         """,
                 id, email, displayName, status.name(),
                 status == UserStatus.ACTIVE ? null : YEAR_2000,
+                status == UserStatus.ACTIVE ? null : YEAR_2000,
+                status == UserStatus.DELETING || status == UserStatus.DELETED ? YEAR_2000 : null,
                 status == UserStatus.DELETED ? YEAR_2000 : null,
                 YEAR_2000, YEAR_2000);
 

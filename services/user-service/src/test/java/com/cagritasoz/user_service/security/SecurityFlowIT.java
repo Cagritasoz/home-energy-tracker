@@ -254,8 +254,10 @@ class SecurityFlowIT {
     @Test
     void deletedAccount_isGoneEvenWithAFreshValidToken() throws Exception {
         jdbc.update("""
-                INSERT INTO users (id, email, display_name, status, deletion_requested_at, deleted_at)
-                VALUES (?, 'deleted+1@invalid', 'Deleted user', 'DELETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO users (id, email, display_name, status, deletion_requested_at, deletion_scheduled_for,
+                                   deletion_started_at, deleted_at)
+                VALUES (?, 'deleted+1@invalid', 'Deleted user', 'DELETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """, OTHER_CUSTOMER_ID);
 
         call(Route.ME_GET, TestTokens.user(OTHER_CUSTOMER_ID).bearer()).andExpect(status().isGone());
