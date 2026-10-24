@@ -58,7 +58,9 @@ stateDiagram-v2
 
 There is no way back from `DELETING`. The only undo is cancelling while the account is still `DELETION_SCHEDULED`.
 
-## 5. Schema (migration V11 on top of the current V1–V10)
+## 5. Schema (migrations V11–V14 on top of V1–V10)
+
+Four migrations, one concern each: `V11__users_add_deletion_schedule_and_scheduled_status` (new columns, backfill, status and consistency checks, indexes), `V12__users_allow_keycloak_deleted_at_while_deleting`, `V13__create_user_deletion_participants_table`, `V14__users_drop_keycloak_disabled_at_and_devices_deleted`. They are applied.
 
 `users` (changes):
 
@@ -76,7 +78,7 @@ There is no way back from `DELETING`. The only undo is cancelling while the acco
   - `keycloak_deleted_at IS NULL OR status IN ('DELETING','DELETED')`
   - `deletion_scheduled_for >= deletion_requested_at` (equal means "delete now", used by admin-initiated deletion)
 - Indexes: `idx_users_deletion_scheduled (deletion_scheduled_for) WHERE status = 'DELETION_SCHEDULED'` (the promoter's scan) and `idx_users_deleting (deletion_started_at) WHERE status = 'DELETING'` (finaliser, Keycloak job, watchdog), both partial so they stay small whatever the number of accounts. The old `idx_users_deleting` on `deletion_requested_at` is replaced.
-- Backfill before the constraints go on: a development row already in `DELETING` gets `deletion_scheduled_for` and `deletion_started_at` equal to its `deletion_requested_at`.
+- Backfill before the constraints go on: a row already in `DELETING` or `DELETED` gets `deletion_scheduled_for` and `deletion_started_at` equal to its `deletion_requested_at` (an immediate deletion; the `DELETED` rows need the value too, because the started-at rule covers them). Until the grace period is implemented, `DELETE /users/me` does the same: it sets requested, scheduled and started to one instant.
 
 `user_deletion_participants` (new):
 
