@@ -1,12 +1,12 @@
 package com.cagritasoz.user_service.keycloak;
 
-import com.cagritasoz.user_service.testsupport.ComposeFile;
-import com.cagritasoz.user_service.testsupport.KeycloakBrowser;
-import com.cagritasoz.user_service.testsupport.KeycloakBrowser.Page;
-import com.cagritasoz.user_service.testsupport.KeycloakTestClient;
-import com.cagritasoz.user_service.testsupport.KeycloakTestClient.Response;
-import com.cagritasoz.user_service.testsupport.MailpitClient;
-import com.cagritasoz.user_service.testsupport.MailpitClient.Mail;
+import com.cagritasoz.user_service.testsupport.containers.ComposeFile;
+import com.cagritasoz.user_service.testsupport.keycloak.KeycloakBrowser.Page;
+import com.cagritasoz.user_service.testsupport.keycloak.KeycloakBrowser;
+import com.cagritasoz.user_service.testsupport.keycloak.KeycloakTestClient.Response;
+import com.cagritasoz.user_service.testsupport.keycloak.KeycloakTestClient;
+import com.cagritasoz.user_service.testsupport.keycloak.MailpitClient.Mail;
+import com.cagritasoz.user_service.testsupport.keycloak.MailpitClient;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;

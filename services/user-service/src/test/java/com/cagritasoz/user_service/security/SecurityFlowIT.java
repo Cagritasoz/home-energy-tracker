@@ -1,8 +1,8 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.testsupport.LocalJwks;
-import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
-import com.cagritasoz.user_service.testsupport.TestTokens;
+import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,7 +47,7 @@ class SecurityFlowIT {
 
     @DynamicPropertySource
     static void sharedJwks(DynamicPropertyRegistry registry) {
-        registry.add(SecuritySliceTest.JWK_SET_URI_PROPERTY, LocalJwks.SHARED::url);
+        registry.add(LocalJwks.JWK_SET_URI_PROPERTY, LocalJwks.SHARED::url);
     }
 
     @Autowired

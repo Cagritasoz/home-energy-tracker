@@ -1,6 +1,6 @@
 package com.cagritasoz.user_service.keycloak;
 
-import com.cagritasoz.user_service.testsupport.ComposeFile;
+import com.cagritasoz.user_service.testsupport.containers.ComposeFile;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;

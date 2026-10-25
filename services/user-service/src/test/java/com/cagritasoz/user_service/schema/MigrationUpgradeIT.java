@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.schema;
 
-import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
-import com.cagritasoz.user_service.testsupport.UserFixtures;
+import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Test;

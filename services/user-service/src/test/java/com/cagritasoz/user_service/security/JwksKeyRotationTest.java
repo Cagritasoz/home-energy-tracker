@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.testsupport.LocalJwks;
-import com.cagritasoz.user_service.testsupport.TestTokens;
+import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
 import com.nimbusds.jose.jwk.RSAKey;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -40,7 +40,7 @@ class JwksKeyRotationTest {
     // The address can not be known in advance.
     @DynamicPropertySource
     static void jwks(DynamicPropertyRegistry registry) {
-        registry.add(SecuritySliceTest.JWK_SET_URI_PROPERTY, JWKS::url);
+        registry.add(LocalJwks.JWK_SET_URI_PROPERTY, JWKS::url);
     }
 
     @Autowired

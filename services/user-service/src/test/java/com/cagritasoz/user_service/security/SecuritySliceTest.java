@@ -1,12 +1,12 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.dto.UserAdminResponse;
-import com.cagritasoz.user_service.dto.UserResponse;
-import com.cagritasoz.user_service.service.UserAdminService;
-import com.cagritasoz.user_service.service.UserDeletionService;
-import com.cagritasoz.user_service.service.UserProvisioningService;
-import com.cagritasoz.user_service.service.UserService;
-import com.cagritasoz.user_service.testsupport.LocalJwks;
+import com.cagritasoz.user_service.admin.AdminUserResponse;
+import com.cagritasoz.user_service.admin.AdminUserService;
+import com.cagritasoz.user_service.deletion.DeletionSchedulingService;
+import com.cagritasoz.user_service.profile.UserProfileService;
+import com.cagritasoz.user_service.provisioning.UserProvisioningService;
+import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.user.UserResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageImpl;
@@ -32,35 +32,33 @@ public abstract class SecuritySliceTest {
 
     protected static final UUID ADMIN_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
-    protected static final String JWK_SET_URI_PROPERTY = "spring.security.oauth2.resourceserver.jwt.jwk-set-uri";
-
     @Autowired
     protected MockMvc mockMvc;
 
     @Autowired
-    protected UserService userService;
+    protected UserProfileService userProfileService;
 
     @Autowired
-    protected UserDeletionService userDeletionService;
+    protected DeletionSchedulingService deletionSchedulingService;
 
     @Autowired
-    protected UserAdminService userAdminService;
+    protected AdminUserService adminUserService;
 
     @Autowired
     protected UserProvisioningService provisioningService;
 
     @DynamicPropertySource
     static void sharedJwks(DynamicPropertyRegistry registry) {
-        registry.add(JWK_SET_URI_PROPERTY, LocalJwks.SHARED::url);
+        registry.add(LocalJwks.JWK_SET_URI_PROPERTY, LocalJwks.SHARED::url);
     }
 
     @BeforeEach
     void stubServices() {
-        when(userService.getUser(any())).thenReturn(UserResponse.builder().build());
-        when(userService.updateUser(any(), any())).thenReturn(UserResponse.builder().build());
-        when(userDeletionService.scheduleDeletion(any())).thenReturn(UserResponse.builder().build());
-        when(userAdminService.getUser(any())).thenReturn(UserAdminResponse.builder().build());
-        when(userAdminService.listUsers(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of()));
+        when(userProfileService.getUser(any())).thenReturn(UserResponse.builder().build());
+        when(userProfileService.updateUser(any(), any())).thenReturn(UserResponse.builder().build());
+        when(deletionSchedulingService.scheduleDeletion(any())).thenReturn(UserResponse.builder().build());
+        when(adminUserService.getUser(any())).thenReturn(AdminUserResponse.builder().build());
+        when(adminUserService.listUsers(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of()));
     }
 
     protected ResultActions call(Route route, String authorization) throws Exception {
@@ -72,6 +70,6 @@ public abstract class SecuritySliceTest {
     }
 
     protected void verifyNoServiceWasCalled() {
-        verifyNoInteractions(userService, userDeletionService, userAdminService, provisioningService);
+        verifyNoInteractions(userProfileService, deletionSchedulingService, adminUserService, provisioningService);
     }
 }

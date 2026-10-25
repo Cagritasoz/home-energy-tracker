@@ -1,19 +1,17 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.config.security.KeycloakRealmRoleConverter;
-import com.cagritasoz.user_service.config.security.ProblemDetailAccessDeniedHandler;
-import com.cagritasoz.user_service.config.security.ProblemDetailAuthenticationEntryPoint;
-import com.cagritasoz.user_service.controller.UserAdminController;
-import com.cagritasoz.user_service.controller.UserController;
-import com.cagritasoz.user_service.dto.UserAdminResponse;
-import com.cagritasoz.user_service.dto.UserResponse;
-import com.cagritasoz.user_service.exception.GlobalExceptionHandler;
-import com.cagritasoz.user_service.service.UserAdminService;
-import com.cagritasoz.user_service.service.UserDeletionService;
-import com.cagritasoz.user_service.service.UserProvisioningService;
-import com.cagritasoz.user_service.service.UserService;
-import com.cagritasoz.user_service.testsupport.LocalJwks;
-import com.cagritasoz.user_service.testsupport.TestTokens;
+import com.cagritasoz.user_service.admin.AdminUserController;
+import com.cagritasoz.user_service.deletion.AccountDeletionController;
+import com.cagritasoz.user_service.admin.AdminUserResponse;
+import com.cagritasoz.user_service.admin.AdminUserService;
+import com.cagritasoz.user_service.deletion.DeletionSchedulingService;
+import com.cagritasoz.user_service.profile.UserProfileController;
+import com.cagritasoz.user_service.profile.UserProfileService;
+import com.cagritasoz.user_service.provisioning.UserProvisioningService;
+import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.user.UserResponse;
+import com.cagritasoz.user_service.web.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -50,7 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(controllers = {UserController.class, UserAdminController.class})
+@WebMvcTest(controllers = {UserProfileController.class, AccountDeletionController.class, AdminUserController.class})
 @Import({
         KeycloakRealmRoleConverter.class,
         ProblemDetailAuthenticationEntryPoint.class,
@@ -58,7 +56,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         GlobalExceptionHandler.class,
         MethodSecurityTest.PermitAllUrlRules.class // Import the modified FilterChain instead of production FilterChain.
 })
-@MockitoBean(types = {UserService.class, UserDeletionService.class, UserAdminService.class, UserProvisioningService.class})
+@MockitoBean(types = {UserProfileService.class, DeletionSchedulingService.class, AdminUserService.class, UserProvisioningService.class})
 class MethodSecurityTest {
 
     private static final UUID USER_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -104,13 +102,13 @@ class MethodSecurityTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private UserService userService;
+    private UserProfileService userProfileService;
 
     @Autowired
-    private UserDeletionService userDeletionService;
+    private DeletionSchedulingService deletionSchedulingService;
 
     @Autowired
-    private UserAdminService userAdminService;
+    private AdminUserService adminUserService;
 
     @Autowired
     private UserProvisioningService provisioningService;
@@ -125,11 +123,11 @@ class MethodSecurityTest {
 
     @BeforeEach
     void stubServices() {
-        when(userService.getUser(any())).thenReturn(UserResponse.builder().build());
-        when(userService.updateUser(any(), any())).thenReturn(UserResponse.builder().build());
-        when(userDeletionService.scheduleDeletion(any())).thenReturn(UserResponse.builder().build());
-        when(userAdminService.getUser(any())).thenReturn(UserAdminResponse.builder().build());
-        when(userAdminService.listUsers(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of()));
+        when(userProfileService.getUser(any())).thenReturn(UserResponse.builder().build());
+        when(userProfileService.updateUser(any(), any())).thenReturn(UserResponse.builder().build());
+        when(deletionSchedulingService.scheduleDeletion(any())).thenReturn(UserResponse.builder().build());
+        when(adminUserService.getUser(any())).thenReturn(AdminUserResponse.builder().build());
+        when(adminUserService.listUsers(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of()));
     }
 
     private ResultActions call(Route route, String bearer) throws Exception {
@@ -149,7 +147,7 @@ class MethodSecurityTest {
         call(route, TestTokens.user(USER_ID).bearer())
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/forbidden"));
-        verifyNoInteractions(userAdminService);
+        verifyNoInteractions(adminUserService);
     }
 
     @ParameterizedTest
@@ -158,7 +156,7 @@ class MethodSecurityTest {
         call(route, TestTokens.admin(ADMIN_ID).bearer())
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/forbidden"));
-        verifyNoInteractions(userService, userDeletionService);
+        verifyNoInteractions(userProfileService, deletionSchedulingService);
     }
 
     @ParameterizedTest
@@ -175,14 +173,14 @@ class MethodSecurityTest {
         call(route, null)
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer realm=\"energy-tracker\""));
-        verifyNoInteractions(userAdminService);
+        verifyNoInteractions(adminUserService);
     }
 
     @ParameterizedTest
     @MethodSource("customerRoutes")
     void userController_rejectsAnAnonymousCallerWith401(Route route) throws Exception {
         call(route, null).andExpect(status().isUnauthorized());
-        verifyNoInteractions(userService, userDeletionService);
+        verifyNoInteractions(userProfileService, deletionSchedulingService);
     }
 
     @ParameterizedTest

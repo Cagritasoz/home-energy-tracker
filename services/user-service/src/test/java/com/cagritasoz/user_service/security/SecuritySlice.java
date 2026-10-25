@@ -1,18 +1,15 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.config.security.KeycloakRealmRoleConverter;
-import com.cagritasoz.user_service.config.security.ProblemDetailAccessDeniedHandler;
-import com.cagritasoz.user_service.config.security.ProblemDetailAuthenticationEntryPoint;
-import com.cagritasoz.user_service.config.security.SecurityConfig;
-import com.cagritasoz.user_service.config.web.WebMvcConfig;
-import com.cagritasoz.user_service.controller.UserAdminController;
-import com.cagritasoz.user_service.controller.UserController;
-import com.cagritasoz.user_service.exception.GlobalExceptionHandler;
-import com.cagritasoz.user_service.interceptor.UserProvisioningInterceptor;
-import com.cagritasoz.user_service.service.UserAdminService;
-import com.cagritasoz.user_service.service.UserDeletionService;
-import com.cagritasoz.user_service.service.UserProvisioningService;
-import com.cagritasoz.user_service.service.UserService;
+import com.cagritasoz.user_service.admin.AdminUserController;
+import com.cagritasoz.user_service.admin.AdminUserService;
+import com.cagritasoz.user_service.deletion.AccountDeletionController;
+import com.cagritasoz.user_service.deletion.DeletionSchedulingService;
+import com.cagritasoz.user_service.profile.UserProfileController;
+import com.cagritasoz.user_service.profile.UserProfileService;
+import com.cagritasoz.user_service.provisioning.UserProvisioningInterceptor;
+import com.cagritasoz.user_service.provisioning.UserProvisioningService;
+import com.cagritasoz.user_service.provisioning.WebMvcConfig;
+import com.cagritasoz.user_service.web.GlobalExceptionHandler;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -24,7 +21,7 @@ import java.lang.annotation.Target;
 
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
-@WebMvcTest(controllers = {UserController.class, UserAdminController.class})
+@WebMvcTest(controllers = {UserProfileController.class, AccountDeletionController.class, AdminUserController.class})
 @Import({
         SecurityConfig.class,
         ProblemDetailAuthenticationEntryPoint.class,
@@ -34,6 +31,6 @@ import java.lang.annotation.Target;
         UserProvisioningInterceptor.class,
         GlobalExceptionHandler.class
 })
-@MockitoBean(types = {UserService.class, UserDeletionService.class, UserAdminService.class, UserProvisioningService.class})
+@MockitoBean(types = {UserProfileService.class, DeletionSchedulingService.class, AdminUserService.class, UserProvisioningService.class})
 public @interface SecuritySlice {
 }
