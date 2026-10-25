@@ -80,6 +80,19 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(HttpStatus.GONE, "account-deleted", "Account deleted", e.getMessage());
     }
 
+    // The account is DELETION_SCHEDULED and the request would change it: 409, because cancelling the deletion makes
+    // the same request succeed. Not a 403 - nothing about the caller's permissions is wrong.
+    @ExceptionHandler(DeletionScheduledException.class)
+    public ProblemDetail handleDeletionScheduledException(DeletionScheduledException e) {
+        return problem(HttpStatus.CONFLICT, "deletion-scheduled", "Deletion scheduled", e.getMessage());
+    }
+
+    // A cancel after the deadline but before the promoter ran: too late, and the state will not change back.
+    @ExceptionHandler(DeletionDeadlinePassedException.class)
+    public ProblemDetail handleDeletionDeadlinePassedException(DeletionDeadlinePassedException e) {
+        return problem(HttpStatus.CONFLICT, "deletion-deadline-passed", "Deletion deadline passed", e.getMessage());
+    }
+
     // TODO: Evaluate whether it would be better to make these two custom exceptions extend AccessDeniedException. See comment below for Exception.class
     @ExceptionHandler(EmailNotVerifiedException.class)
     public ProblemDetail handleEmailNotVerifiedException(EmailNotVerifiedException e) {

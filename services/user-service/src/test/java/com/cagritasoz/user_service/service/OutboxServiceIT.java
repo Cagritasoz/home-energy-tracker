@@ -66,7 +66,13 @@ class OutboxServiceIT {
                 .isInstanceOf(IllegalTransactionStateException.class);
         assertThatThrownBy(() -> outboxService.recordUserUpdated(user))
                 .isInstanceOf(IllegalTransactionStateException.class);
-        assertThatThrownBy(() -> outboxService.recordUserDeletionRequested(user))
+        assertThatThrownBy(() -> outboxService.recordUserDeletionScheduled(user))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        assertThatThrownBy(() -> outboxService.recordUserDeletionCancelled(user))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        assertThatThrownBy(() -> outboxService.recordUserDeletionStarted(user))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        assertThatThrownBy(() -> outboxService.recordUserDeletionFinalized(user))
                 .isInstanceOf(IllegalTransactionStateException.class);
 
         assertThat(outboxRowCount(user.getId())).isZero();
@@ -129,25 +135,126 @@ class OutboxServiceIT {
     }
 
     @Test
-    void recordUserDeletionRequested_afterMarkDeleting_writesRowStampedWithDeletionRequestedAtAndEmptyData() {
+    void recordUserDeletionScheduled_afterScheduleDeletion_writesRowStampedWithDeletionRequestedAtAndTheDeadline() {
 
         UUID id = UUID.randomUUID();
 
         insertActiveUserIn2000(id);
-        userRepository.markDeleting(id);
+        userRepository.scheduleDeletion(id, "PT5M");
         User user = userRepository.findById(id).orElseThrow();
 
-        outboxService.recordUserDeletionRequested(user);
+        outboxService.recordUserDeletionScheduled(user);
         entityManager.flush();
 
         Map<String, Object> row = outboxRow(id);
 
         assertThat(row)
-                .containsEntry("event_type", UserEventType.USER_DELETION_REQUESTED.value())
-                .containsEntry("aggregate_version", 1L)
-                .containsEntry("payload_data", "{}");
+                .containsEntry("event_type", UserEventType.USER_DELETION_SCHEDULED.value())
+                .containsEntry("aggregate_version", 1L);
         assertThat(occurredAt(id)).isEqualTo(userTimestamp("deletion_requested_at", id));
         assertThat(payloadOccurredAt(id)).isEqualTo(occurredAt(id));
+
+        // The deadline in the payload is the one the database computed: five minutes after the request.
+        Instant deadline = Objects.requireNonNull(jdbc.queryForObject(
+                "SELECT (payload -> 'data' ->> 'deletionScheduledFor')::timestamptz FROM outbox_events WHERE aggregate_id = ?",
+                Instant.class, id.toString()));
+        assertThat(deadline)
+                .isEqualTo(userTimestamp("deletion_scheduled_for", id))
+                .isEqualTo(occurredAt(id).plusSeconds(300));
+
+    }
+
+    @Test
+    void recordUserDeletionCancelled_afterCancelDeletion_writesRowStampedWithUpdatedAtAndEmptyData() {
+
+        UUID id = UUID.randomUUID();
+
+        insertActiveUserIn2000(id);
+        userRepository.scheduleDeletion(id, "PT5M");
+        entityManager.clear();
+        userRepository.cancelDeletion(id);
+        User user = userRepository.findById(id).orElseThrow();
+
+        outboxService.recordUserDeletionCancelled(user);
+        entityManager.flush();
+
+        Map<String, Object> row = outboxRow(id);
+
+        assertThat(row)
+                .containsEntry("event_type", UserEventType.USER_DELETION_CANCELLED.value())
+                .containsEntry("aggregate_version", 2L)
+                .containsEntry("payload_data", "{}");
+        assertThat(occurredAt(id))
+                .isEqualTo(userTimestamp("updated_at", id))
+                .isAfter(Instant.parse(YEAR_2000));
+        assertThat(payloadOccurredAt(id)).isEqualTo(occurredAt(id));
+
+    }
+
+    // Started and Finalized are written by jobs that arrive in later steps; the rows they will read are built by hand.
+    @Test
+    void recordUserDeletionStarted_forADeletingRow_writesRowStampedWithDeletionStartedAtAndEmptyData() {
+
+        UUID id = UUID.randomUUID();
+
+        insertDeletingUserIn2000(id);
+        User user = userRepository.findById(id).orElseThrow();
+
+        outboxService.recordUserDeletionStarted(user);
+        entityManager.flush();
+
+        assertThat(outboxRow(id))
+                .containsEntry("event_type", UserEventType.USER_DELETION_STARTED.value())
+                .containsEntry("payload_data", "{}");
+        assertThat(occurredAt(id)).isEqualTo(userTimestamp("deletion_started_at", id));
+        assertThat(payloadOccurredAt(id)).isEqualTo(occurredAt(id));
+
+    }
+
+    @Test
+    void recordUserDeletionFinalized_forADeletedRow_writesRowStampedWithDeletedAtAndEmptyData() {
+
+        UUID id = UUID.randomUUID();
+
+        insertDeletedUserIn2000(id);
+        User user = userRepository.findById(id).orElseThrow();
+
+        outboxService.recordUserDeletionFinalized(user);
+        entityManager.flush();
+
+        assertThat(outboxRow(id))
+                .containsEntry("event_type", UserEventType.USER_DELETION_FINALIZED.value())
+                .containsEntry("payload_data", "{}");
+        assertThat(occurredAt(id)).isEqualTo(userTimestamp("deleted_at", id));
+        assertThat(payloadOccurredAt(id)).isEqualTo(occurredAt(id));
+
+    }
+
+    private void insertDeletingUserIn2000(UUID id) {
+
+        jdbc.update("""
+                        INSERT INTO users
+                        (id, email, display_name, status, deletion_requested_at, deletion_scheduled_for, deletion_started_at,
+                         created_at, updated_at)
+                        VALUES
+                        (?, 'deleted+x@invalid', 'Deleted user', 'DELETING', ?::timestamptz, ?::timestamptz, ?::timestamptz,
+                         ?::timestamptz, ?::timestamptz)
+                        """,
+                id, YEAR_2000, YEAR_2000, YEAR_2000, YEAR_2000, YEAR_2000);
+
+    }
+
+    private void insertDeletedUserIn2000(UUID id) {
+
+        jdbc.update("""
+                        INSERT INTO users
+                        (id, email, display_name, status, deletion_requested_at, deletion_scheduled_for, deletion_started_at,
+                         deleted_at, created_at, updated_at)
+                        VALUES
+                        (?, 'deleted+x@invalid', 'Deleted user', 'DELETED', ?::timestamptz, ?::timestamptz, ?::timestamptz,
+                         ?::timestamptz, ?::timestamptz, ?::timestamptz)
+                        """,
+                id, YEAR_2000, YEAR_2000, YEAR_2000, YEAR_2000, YEAR_2000, YEAR_2000);
 
     }
 

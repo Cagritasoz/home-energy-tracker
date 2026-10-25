@@ -3,6 +3,7 @@ package com.cagritasoz.user_service.security;
 import com.cagritasoz.user_service.dto.UserAdminResponse;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.service.UserAdminService;
+import com.cagritasoz.user_service.service.UserDeletionService;
 import com.cagritasoz.user_service.service.UserProvisioningService;
 import com.cagritasoz.user_service.service.UserService;
 import com.cagritasoz.user_service.testsupport.LocalJwks;
@@ -40,6 +41,9 @@ public abstract class SecuritySliceTest {
     protected UserService userService;
 
     @Autowired
+    protected UserDeletionService userDeletionService;
+
+    @Autowired
     protected UserAdminService userAdminService;
 
     @Autowired
@@ -54,6 +58,7 @@ public abstract class SecuritySliceTest {
     void stubServices() {
         when(userService.getUser(any())).thenReturn(UserResponse.builder().build());
         when(userService.updateUser(any(), any())).thenReturn(UserResponse.builder().build());
+        when(userDeletionService.scheduleDeletion(any())).thenReturn(UserResponse.builder().build());
         when(userAdminService.getUser(any())).thenReturn(UserAdminResponse.builder().build());
         when(userAdminService.listUsers(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of()));
     }
@@ -67,6 +72,6 @@ public abstract class SecuritySliceTest {
     }
 
     protected void verifyNoServiceWasCalled() {
-        verifyNoInteractions(userService, userAdminService, provisioningService);
+        verifyNoInteractions(userService, userDeletionService, userAdminService, provisioningService);
     }
 }

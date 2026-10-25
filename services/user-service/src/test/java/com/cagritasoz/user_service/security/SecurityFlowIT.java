@@ -56,7 +56,7 @@ class SecurityFlowIT {
 
     @BeforeEach
     void emptyTables() {
-        jdbc.execute("TRUNCATE TABLE outbox_events, users RESTART IDENTITY CASCADE");
+        jdbc.execute("TRUNCATE TABLE outbox_events, user_deletion_participants, users RESTART IDENTITY CASCADE");
     }
 
     static Stream<Route> customerRoutes() {
@@ -224,20 +224,45 @@ class SecurityFlowIT {
         assertNothingWasWritten();
     }
 
+    // The grace period: the account stays readable, writes are refused, a repeat of the request changes nothing.
+    // Every route of every status is covered by DeletionStatusMatrixIT; this is the end-to-end happy path.
     @Test
-    void deletion_blocksEveryCustomerRouteWithAStillValidToken() throws Exception {
+    void deletion_scheduling_keepsTheAccountReadableButReadOnly() throws Exception {
         String bearer = TestTokens.user(CUSTOMER_ID).bearer();
         call(Route.ME_GET, bearer).andExpect(status().isOk());
 
+        call(Route.ME_DELETE, bearer)
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"))
+                .andExpect(jsonPath("$.deletionScheduledFor").isNotEmpty());
+
+        call(Route.ME_GET, bearer)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"));
+        call(Route.ME_PATCH, bearer)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/deletion-scheduled"));
         call(Route.ME_DELETE, bearer).andExpect(status().isAccepted());
 
-        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionRequested");
+        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionScheduled");
+    }
+
+    // Once the promoter has started the deletion (simulated here by moving the row to DELETING, as the promoter
+    // will) every customer route answers 410 with a token that is still valid: the status comes from the database.
+    @Test
+    void deletion_afterTheCleanupStarted_blocksEveryCustomerRouteWithAStillValidToken() throws Exception {
+        String bearer = TestTokens.user(CUSTOMER_ID).bearer();
+        call(Route.ME_GET, bearer).andExpect(status().isOk());
+        call(Route.ME_DELETE, bearer).andExpect(status().isAccepted());
+        jdbc.update("UPDATE users SET status = 'DELETING', deletion_started_at = CURRENT_TIMESTAMP, version = version + 1 WHERE id = ?",
+                CUSTOMER_ID);
+
         for (Route route : Route.CUSTOMER) {
             call(route, bearer)
                     .andExpect(status().isGone())
                     .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/account-deleted"));
         }
-        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionRequested");
+        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionScheduled");
     }
 
     @Test
@@ -248,7 +273,31 @@ class SecurityFlowIT {
         mockMvc.perform(get("/api/v1/admin/users/" + CUSTOMER_ID)
                         .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("DELETING"));
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"))
+                .andExpect(jsonPath("$.participants").isEmpty());
+    }
+
+    // The admin view shows which services a deletion still waits for. The rows are written by hand here (the promoter
+    // that normally writes them arrives in a later step).
+    @Test
+    void adminView_listsTheParticipantsOfADeletion() throws Exception {
+        call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isOk());
+        call(Route.ME_DELETE, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isAccepted());
+        jdbc.update("INSERT INTO user_deletion_participants (user_id, participant, acked_at) VALUES (?, 'devices', CURRENT_TIMESTAMP)", CUSTOMER_ID);
+        jdbc.update("INSERT INTO user_deletion_participants (user_id, participant) VALUES (?, 'alerts')", CUSTOMER_ID);
+
+        mockMvc.perform(get("/api/v1/admin/users/" + CUSTOMER_ID)
+                        .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.participants[0].participant").value("alerts"))
+                .andExpect(jsonPath("$.participants[0].ackedAt").value((Object) null))
+                .andExpect(jsonPath("$.participants[1].participant").value("devices"))
+                .andExpect(jsonPath("$.participants[1].ackedAt").isNotEmpty());
+
+        mockMvc.perform(get("/api/v1/admin/users")
+                        .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].participants.length()").value(2));
     }
 
     @Test

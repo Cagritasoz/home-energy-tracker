@@ -26,6 +26,7 @@ import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -54,20 +55,13 @@ public class UserProvisioningServiceTest {
     // "changed" cases can't be confused with each other.
     private static final String NEW_EMAIL = "a.morgan@example.com";
 
-    // A single @Test method can only check ONE fixed scenario. This behavior - "any status other
-    // than ACTIVE gets rejected" - is really the SAME check repeated for every non-ACTIVE value of
-    // UserStatus (currently DELETING and DELETED). @ParameterizedTest replaces @Test on a method
-    // that takes a parameter, and a "source" annotation (@EnumSource here) tells JUnit what values
-    // to run that one method body with - once per value, each run reported as its own separate
-    // pass/fail, not lumped together. @EnumSource(mode = EXCLUDE, names = "ACTIVE") means "every
-    // UserStatus constant except ACTIVE" - so this runs twice, once with status = DELETING and
-    // once with status = DELETED, without two near-identical @Test methods. The (name = "...")
-    // customizes what each individual run is labeled as in the test report/output, using {0} for
-    // the first (and here, only) parameter - so a failure clearly says which status failed, e.g.
-    // "ensureUsable_nonActiveStatus_throwsAccountDeleted[status=DELETING]".
+    // One check repeated for every status the API treats as gone. @ParameterizedTest replaces @Test on a method that
+    // takes a parameter, and @EnumSource tells JUnit which values to run the body with - once per value, each reported
+    // as its own pass or fail, e.g. "ensureUsable_deletingOrDeletedAccount_throwsAccountDeleted[status=DELETING]".
+    // DELETION_SCHEDULED is deliberately not here: that account can still be read and cancelled (next test).
     @ParameterizedTest(name = "status={0}")
-    @EnumSource(value = UserStatus.class, mode = EnumSource.Mode.EXCLUDE, names = "ACTIVE")
-    void ensureUsable_nonActiveStatus_throwsAccountDeleted(UserStatus status) {
+    @EnumSource(value = UserStatus.class, names = {"DELETING", "DELETED"})
+    void ensureUsable_deletingOrDeletedAccount_throwsAccountDeleted(UserStatus status) {
 
         User user = UserFixtures.activeUser().id(USER_ID).status(status).build();
         Jwt token = JwtFixtures.validUser(USER_ID).build();
@@ -78,6 +72,20 @@ public class UserProvisioningServiceTest {
                 .isInstanceOf(AccountDeletedException.class);
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
         verify(userRepository, never()).syncEmail(any(), any());
+        verifyNoInteractions(outboxService);
+    }
+
+    // The grace period: the account is let through so the user can see the banner and cancel; what a scheduled account
+    // may not do is enforced where the row is changed, not here.
+    @Test
+    void ensureUsable_deletionScheduledAccount_isLetThroughAndWritesNothing() {
+
+        User user = UserFixtures.activeUser().id(USER_ID).status(UserStatus.DELETION_SCHEDULED).build();
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        assertThatCode(() -> provisioningService.ensureUsable(token)).doesNotThrowAnyException();
         verifyNoInteractions(outboxService);
     }
 

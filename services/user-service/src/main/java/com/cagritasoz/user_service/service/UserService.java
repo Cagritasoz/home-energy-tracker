@@ -4,8 +4,8 @@ import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.exception.AccountDeletedException;
+import com.cagritasoz.user_service.exception.DeletionScheduledException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
-import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,7 +24,7 @@ public class UserService {
     @Transactional(readOnly = true)
     public UserResponse getUser(UUID id) {
 
-        return toResponse(findUser(id));
+        return UserResponse.from(findUser(id));
 
     }
 
@@ -33,10 +33,18 @@ public class UserService {
 
         User user = findUser(id);
 
-        // The interceptor's ACTIVE check committed before this transaction began; a DELETE can land in between.
-        if (user.getStatus() != UserStatus.ACTIVE) {
+        // The interceptor's check committed before this transaction began; a deletion request can land in between,
+        // so the write rules are enforced here, on the row this transaction is about to change. A concurrent
+        // schedule that commits after this read but before the save moves the version, and @Version turns the
+        // save into a 409 instead of a silent overwrite.
+        switch (user.getStatus()) {
 
-            throw new AccountDeletedException();
+            case ACTIVE -> { }
+
+            // During the grace period the account is read-only; cancelling the deletion makes the same request succeed.
+            case DELETION_SCHEDULED -> throw new DeletionScheduledException();
+
+            case DELETING, DELETED -> throw new AccountDeletedException();
 
         }
 
@@ -59,29 +67,7 @@ public class UserService {
         if(!synced.getVersion().equals(versionBefore)) { // Insert outbox only if an UPDATE is issued.
             outboxService.recordUserUpdated(synced);
         }
-        return toResponse(synced);
-    }
-
-    @Transactional
-    public void requestDeletion(UUID id) {
-
-        if (userRepository.markDeleting(id) == 0) {
-
-            // 0 rows changed: either the account was already past ACTIVE (nothing to do) or there is
-            // no such account at all. Only the second case is an error, and this extra query runs
-            // only on this rare path.
-            if (!userRepository.existsById(id)) {
-
-                throw new UserNotFoundException();
-
-            }
-            return;
-        }
-
-        User deletingUser = userRepository.findById(id)
-                .orElseThrow(() -> new IllegalStateException("User " + id + " missing after markDeleting."));
-
-        outboxService.recordUserDeletionRequested(deletingUser);
+        return UserResponse.from(synced);
     }
 
     private User findUser(UUID id) {
@@ -89,16 +75,4 @@ public class UserService {
         return userRepository.findById(id)
                 .orElseThrow(UserNotFoundException::new);
     }
-
-    private UserResponse toResponse(User user) {
-        return UserResponse.builder()
-                .id(user.getId())
-                .email(user.getEmail())
-                .displayName(user.getDisplayName())
-                .timezone(user.getTimezone())
-                .createdAt(user.getCreatedAt())
-                .updatedAt(user.getUpdatedAt())
-                .build();
-    }
 }
-

@@ -4,7 +4,6 @@ import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.exception.AccountDeletedException;
 import com.cagritasoz.user_service.exception.EmailNotVerifiedException;
 import com.cagritasoz.user_service.exception.MissingIdentityClaimException;
-import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -31,7 +30,9 @@ public class UserProvisioningService {
         User user = userRepository.findById(sub)
                 .orElseGet(() -> provision(sub, token)); // If user does not exist, insert user.
 
-        if(user.getStatus() != UserStatus.ACTIVE) { // Reject tokens that have outlived the accounts' usability.
+        // Reject tokens that have outlived the account. A DELETION_SCHEDULED account is let through: it can still be
+        // read and canceled, and the write rules are enforced where the row is changed.
+        if(user.getStatus().isGone()) {
 
             throw new AccountDeletedException();
 

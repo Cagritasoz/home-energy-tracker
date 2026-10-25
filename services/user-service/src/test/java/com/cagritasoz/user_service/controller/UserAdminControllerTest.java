@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.controller;
 
+import com.cagritasoz.user_service.dto.ParticipantResponse;
 import com.cagritasoz.user_service.dto.UserAdminResponse;
 import com.cagritasoz.user_service.exception.GlobalExceptionHandler;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
@@ -63,6 +64,7 @@ public class UserAdminControllerTest {
                 .timezone("UTC")
                 .status(UserStatus.ACTIVE)
                 .version(0L)
+                .participants(List.of())
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .updatedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .build();
@@ -83,6 +85,9 @@ public class UserAdminControllerTest {
                 .deletionStartedAt(Instant.parse("2026-01-31T23:58:42Z"))
                 .keycloakDeletedAt(Instant.parse("2026-02-01T00:00:05Z"))
                 .deletedAt(Instant.parse("2026-02-01T00:01:09Z"))
+                .participants(List.of(
+                        ParticipantResponse.builder().participant("devices").ackedAt(Instant.parse("2026-02-01T00:00:02Z")).build(),
+                        ParticipantResponse.builder().participant("usage").waivedAt(Instant.parse("2026-02-01T00:00:03Z")).build()))
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .updatedAt(Instant.parse("2026-02-01T00:01:09Z"))
                 .build();
@@ -106,6 +111,7 @@ public class UserAdminControllerTest {
                 // A null column must still appear in the JSON as an explicit null, not be left out.
                 .andExpect(jsonPath("$.content[0].deletionScheduledFor").value((Object) null))
                 .andExpect(jsonPath("$.content[0].deletionStartedAt").value((Object) null))
+                .andExpect(jsonPath("$.content[0].participants").isEmpty())
                 .andExpect(jsonPath("$.content[0].keycloakDeletedAt").value((Object) null))
                 .andExpect(jsonPath("$.page.size").value(20))
                 .andExpect(jsonPath("$.page.number").value(0))
@@ -212,6 +218,13 @@ public class UserAdminControllerTest {
                 .andExpect(jsonPath("$.deletionStartedAt").value("2026-01-31T23:58:42Z"))
                 .andExpect(jsonPath("$.keycloakDeletedAt").value("2026-02-01T00:00:05Z"))
                 .andExpect(jsonPath("$.deletedAt").value("2026-02-01T00:01:09Z"))
+                // The services the deletion waits for: confirmed (ackedAt), released by a migration (waivedAt) or pending (neither).
+                .andExpect(jsonPath("$.participants[0].participant").value("devices"))
+                .andExpect(jsonPath("$.participants[0].ackedAt").value("2026-02-01T00:00:02Z"))
+                .andExpect(jsonPath("$.participants[0].waivedAt").value((Object) null))
+                .andExpect(jsonPath("$.participants[1].participant").value("usage"))
+                .andExpect(jsonPath("$.participants[1].ackedAt").value((Object) null))
+                .andExpect(jsonPath("$.participants[1].waivedAt").value("2026-02-01T00:00:03Z"))
                 .andExpect(jsonPath("$.createdAt").value("2026-01-01T00:00:00Z"))
                 .andExpect(jsonPath("$.updatedAt").value("2026-02-01T00:01:09Z"));
 

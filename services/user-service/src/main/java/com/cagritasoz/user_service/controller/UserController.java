@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.controller;
 
 import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
+import com.cagritasoz.user_service.service.UserDeletionService;
 import com.cagritasoz.user_service.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,8 @@ public class UserController {
 
     private final UserService userService;
 
+    private final UserDeletionService userDeletionService;
+
     @GetMapping
     public ResponseEntity<UserResponse> getMe(@AuthenticationPrincipal Jwt token) {
 
@@ -42,16 +45,25 @@ public class UserController {
 
     }
 
+    // Does not delete anything: it starts the grace period. 202 with the account as it now stands, so the frontend
+    // can show the deletion date straight away; a repeat while scheduled answers the same date.
     @DeleteMapping
-    public ResponseEntity<Void> deleteMe(@AuthenticationPrincipal Jwt token) {
+    public ResponseEntity<UserResponse> deleteMe(@AuthenticationPrincipal Jwt token) {
 
-        userService.requestDeletion(currentUserId(token));
+        UserResponse user = userDeletionService.scheduleDeletion(currentUserId(token));
 
-        return ResponseEntity.status(HttpStatus.ACCEPTED).build();
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(user);
+    }
+
+    @PostMapping("/deletion/cancel")
+    public ResponseEntity<Void> cancelDeletion(@AuthenticationPrincipal Jwt token) {
+
+        userDeletionService.cancelDeletion(currentUserId(token));
+
+        return ResponseEntity.noContent().build();
     }
 
     private UUID currentUserId(Jwt token) {
         return UUID.fromString(Objects.requireNonNull(token.getSubject())); // Fail loudly if null. Should not happen.
     }
 }
-

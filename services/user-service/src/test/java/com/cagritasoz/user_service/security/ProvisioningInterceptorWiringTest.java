@@ -85,7 +85,7 @@ class ProvisioningInterceptorWiringTest extends SecuritySliceTest {
 
         assertThat(result.getResponse().getContentAsString()).contains("home-energy-tracker/problems/" + expectedType);
         assertThat(result.getResponse().getContentAsString()).doesNotContain("hunter2");
-        verifyNoInteractions(userService);
+        verifyNoInteractions(userService, userDeletionService);
     }
 
     @Test
@@ -119,6 +119,6 @@ class ProvisioningInterceptorWiringTest extends SecuritySliceTest {
         call(Route.ADMIN_ONE, TestTokens.admin(ADMIN_ID).bearer()).andExpect(status().isOk());
 
         verify(userAdminService).getUser(target);
-        verifyNoInteractions(userService, provisioningService);
+        verifyNoInteractions(userService, userDeletionService, provisioningService);
     }
 }

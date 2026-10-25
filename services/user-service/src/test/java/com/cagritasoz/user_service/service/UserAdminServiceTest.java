@@ -1,8 +1,12 @@
 package com.cagritasoz.user_service.service;
 
+import com.cagritasoz.user_service.dto.ParticipantResponse;
 import com.cagritasoz.user_service.dto.UserAdminResponse;
 import com.cagritasoz.user_service.entity.User;
+import com.cagritasoz.user_service.entity.UserDeletionParticipant;
+import com.cagritasoz.user_service.entity.UserDeletionParticipantId;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
+import com.cagritasoz.user_service.repository.UserDeletionParticipantRepository;
 import com.cagritasoz.user_service.repository.UserRepository;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
 import org.junit.jupiter.api.Test;
@@ -25,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -33,6 +38,9 @@ class UserAdminServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private UserDeletionParticipantRepository participantRepository;
 
     @InjectMocks
     private UserAdminService userAdminService;
@@ -43,7 +51,7 @@ class UserAdminServiceTest {
 
     // Just the id and createdAt overrides - UserFixtures.deletedUser() already defaults to Arthur
     // Morgan (via activeUser()), and every other saga-bookkeeping column this class cares about
-    // (status, version, devicesDeleted, the timestamps) already comes from that default.
+    // (status, version, the deletion timestamps) already comes from that default.
     private User deletedUser() {
         return UserFixtures.deletedUser()
                 .id(USER_ID_1)
@@ -58,7 +66,65 @@ class UserAdminServiceTest {
 
         UserAdminResponse response = userAdminService.getUser(USER_ID_1);
 
-        assertThat(response).usingRecursiveComparison().isEqualTo(deletedUser());
+        // Every column of the row is exposed; the participants are not columns of it (an unstubbed repository
+        // returns none, so the list is empty here).
+        assertThat(response).usingRecursiveComparison().ignoringFields("participants").isEqualTo(deletedUser());
+        assertThat(response.participants()).isEmpty();
+    }
+
+    // What an admin looks at when a deletion is stuck: which services have confirmed and which are still pending.
+    @Test
+    void getUser_withParticipants_returnsThemInTheResponse() {
+
+        Instant acked = Instant.parse("2026-02-01T00:00:02Z");
+
+        when(userRepository.findById(USER_ID_1)).thenReturn(Optional.of(deletedUser()));
+        when(participantRepository.findByIdUserIdOrderByIdParticipant(USER_ID_1)).thenReturn(List.of(
+                participant(USER_ID_1, "alerts", null, null),
+                participant(USER_ID_1, "devices", acked, null),
+                participant(USER_ID_1, "usage", null, acked)));
+
+        UserAdminResponse response = userAdminService.getUser(USER_ID_1);
+
+        assertThat(response.participants())
+                .extracting(ParticipantResponse::participant, ParticipantResponse::ackedAt, ParticipantResponse::waivedAt)
+                .containsExactly(
+                        tuple("alerts", null, null),
+                        tuple("devices", acked, null),
+                        tuple("usage", null, acked));
+    }
+
+    // One query for the whole page, then grouped by user; a user without rows gets an empty list, not null.
+    @Test
+    void listUsers_loadsTheParticipantsOfThePageInOneQueryAndGroupsThemByUser() {
+
+        User user1 = UserFixtures.activeUser().id(USER_ID_1).build();
+        User user2 = deletedUser2();
+
+        when(userRepository.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(user1, user2)));
+        when(participantRepository.findByIdUserIdIn(List.of(USER_ID_1, USER_ID_2))).thenReturn(List.of(
+                participant(USER_ID_2, "devices", null, null),
+                participant(USER_ID_2, "alerts", null, null)));
+
+        Page<UserAdminResponse> page = userAdminService.listUsers(0, 20);
+
+        assertThat(page.getContent().get(0).participants()).isEmpty();
+        assertThat(page.getContent().get(1).participants())
+                .extracting(ParticipantResponse::participant)
+                .containsExactly("alerts", "devices"); // Sorted by name, whatever order the query returned.
+        verify(participantRepository, times(1)).findByIdUserIdIn(any());
+    }
+
+    private User deletedUser2() {
+        return UserFixtures.deletedUser().id(USER_ID_2).build();
+    }
+
+    private static UserDeletionParticipant participant(UUID userId, String name, Instant ackedAt, Instant waivedAt) {
+        return UserDeletionParticipant.builder()
+                .id(new UserDeletionParticipantId(userId, name))
+                .ackedAt(ackedAt)
+                .waivedAt(waivedAt)
+                .build();
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.cagritasoz.user_service.controller.UserController;
 import com.cagritasoz.user_service.exception.GlobalExceptionHandler;
 import com.cagritasoz.user_service.interceptor.UserProvisioningInterceptor;
 import com.cagritasoz.user_service.service.UserAdminService;
+import com.cagritasoz.user_service.service.UserDeletionService;
 import com.cagritasoz.user_service.service.UserProvisioningService;
 import com.cagritasoz.user_service.service.UserService;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -33,6 +34,6 @@ import java.lang.annotation.Target;
         UserProvisioningInterceptor.class,
         GlobalExceptionHandler.class
 })
-@MockitoBean(types = {UserService.class, UserAdminService.class, UserProvisioningService.class})
+@MockitoBean(types = {UserService.class, UserDeletionService.class, UserAdminService.class, UserProvisioningService.class})
 public @interface SecuritySlice {
 }

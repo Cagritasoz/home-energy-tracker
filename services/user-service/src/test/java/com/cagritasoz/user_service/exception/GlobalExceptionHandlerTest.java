@@ -94,6 +94,31 @@ class GlobalExceptionHandlerTest {
 
     }
 
+    // 409, not 403: the caller may write in general, the account's state blocks it, and cancelling fixes it.
+    @Test
+    void handleDeletionScheduledException_returns409WithMessage() {
+        ProblemDetail problemDetail = handler.handleDeletionScheduledException(new DeletionScheduledException());
+
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.CONFLICT.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/deletion-scheduled");
+        assertThat(problemDetail.getTitle()).isEqualTo("Deletion scheduled");
+        assertThat(problemDetail.getDetail())
+                .isEqualTo("The account is scheduled for deletion and cannot be changed. Cancel the deletion first.");
+        assertThat(problemDetail.getProperties()).containsKey("timestamp");
+    }
+
+    @Test
+    void handleDeletionDeadlinePassedException_returns409WithMessage() {
+        ProblemDetail problemDetail = handler.handleDeletionDeadlinePassedException(new DeletionDeadlinePassedException());
+
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.CONFLICT.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/deletion-deadline-passed");
+        assertThat(problemDetail.getTitle()).isEqualTo("Deletion deadline passed");
+        assertThat(problemDetail.getDetail())
+                .isEqualTo("The grace period has ended, so the deletion can no longer be cancelled.");
+        assertThat(problemDetail.getProperties()).containsKey("timestamp");
+    }
+
     @Test
     void handleEmailNotVerifiedException_returns403WithMessage() {
         ProblemDetail problemDetail = handler.handleEmailNotVerifiedException(new EmailNotVerifiedException());

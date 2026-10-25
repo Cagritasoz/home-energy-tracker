@@ -20,6 +20,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +49,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class UserRepositoryIT {
 
     // Old, fixed instants for rows that must not share the transaction's CURRENT_TIMESTAMP.
+    private static final String FAR_FUTURE = "2999-01-01T00:00:00Z";
+
     private static final String YEAR_2000 = "2000-01-01T00:00:00Z";
     private static final String YEAR_2026 = "2026-01-01T00:00:00Z";
 
@@ -457,28 +460,30 @@ class UserRepositoryIT {
 
     }
 
+    // --- scheduleDeletion: ACTIVE -> DELETION_SCHEDULED, a compare-and-set whose deadline the database computes
+
     @Test
-    void markDeleting_activeUser_returnsOneAndMovesToDeleting() {
+    void scheduleDeletion_activeUser_returnsOneAndSchedulesWithTheDeadlineComputedByTheDatabase() {
 
         UUID existingId = UUID.randomUUID();
 
         insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
 
-        int marked = userRepository.markDeleting(existingId);
+        int scheduled = userRepository.scheduleDeletion(existingId, "PT5M");
 
         User user = userRepository.findById(existingId).orElseThrow();
 
-        assertThat(marked).isOne();
+        assertThat(scheduled).isOne();
         assertThat(user.getId()).isEqualTo(existingId);
         assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
         assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
         assertThat(user.getTimezone()).isEqualTo("UTC");
-        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
         assertThat(user.getVersion()).isOne();
         assertThat(user.getDeletionRequestedAt()).isAfter(Instant.parse(YEAR_2000));
-        // An immediate deletion: asked, scheduled and started in the same statement, so the same instant.
-        assertThat(user.getDeletionScheduledFor()).isEqualTo(user.getDeletionRequestedAt());
-        assertThat(user.getDeletionStartedAt()).isEqualTo(user.getDeletionRequestedAt());
+        // Both come from CURRENT_TIMESTAMP of the same statement, so the grace period is exact.
+        assertThat(user.getDeletionScheduledFor()).isEqualTo(user.getDeletionRequestedAt().plusSeconds(300));
+        assertThat(user.getDeletionStartedAt()).isNull();
         assertThat(user.getKeycloakDeletedAt()).isNull();
         assertThat(user.getDeletedAt()).isNull();
         assertThat(user.getCreatedAt()).isEqualTo(Instant.parse(YEAR_2000));
@@ -486,19 +491,55 @@ class UserRepositoryIT {
 
     }
 
+    // Production grace periods are days: the ISO duration of 14 days is "PT336H", which Postgres must read as an interval.
     @Test
-    void markDeleting_deletingUser_returnsZeroAndChangesNothing() {
+    void scheduleDeletion_longGracePeriod_addsExactlyThatManyDays() {
 
         UUID existingId = UUID.randomUUID();
 
-        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
 
-        int marked = userRepository.markDeleting(existingId);
+        userRepository.scheduleDeletion(existingId, Duration.ofDays(14).toString());
 
         User user = userRepository.findById(existingId).orElseThrow();
 
-        assertThat(marked).isZero();
-        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(Duration.between(user.getDeletionRequestedAt(), user.getDeletionScheduledFor())).isEqualTo(Duration.ofDays(14));
+
+    }
+
+    @Test
+    void scheduleDeletion_alreadyScheduledUser_returnsZeroAndKeepsTheOriginalDeadline() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, FAR_FUTURE);
+
+        int scheduled = userRepository.scheduleDeletion(existingId, "PT5M");
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(scheduled).isZero();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getDeletionScheduledFor()).isEqualTo(Instant.parse(FAR_FUTURE));
+        assertThat(user.getUpdatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = UserStatus.class, names = {"DELETING", "DELETED"})
+    void scheduleDeletion_deletingOrDeletedUser_returnsZeroAndChangesNothing(UserStatus status) {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, status);
+
+        int scheduled = userRepository.scheduleDeletion(existingId, "PT5M");
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(scheduled).isZero();
+        assertThat(user.getStatus()).isEqualTo(status);
         assertThat(user.getVersion()).isZero();
         assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));
         assertThat(user.getUpdatedAt()).isEqualTo(Instant.parse(YEAR_2000));
@@ -506,33 +547,14 @@ class UserRepositoryIT {
     }
 
     @Test
-    void markDeleting_deletedUser_returnsZero() {
+    void scheduleDeletion_unknownId_returnsZero() {
 
-        UUID existingId = UUID.randomUUID();
-
-        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
-
-        int marked = userRepository.markDeleting(existingId);
-
-        User user = userRepository.findById(existingId).orElseThrow();
-
-        assertThat(marked).isZero();
-        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETED);
-        assertThat(user.getVersion()).isZero();
-        assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));
-        assertThat(user.getDeletedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(userRepository.scheduleDeletion(UUID.randomUUID(), "PT5M")).isZero();
 
     }
 
     @Test
-    void markDeleting_unknownId_returnsZero() {
-
-        assertThat(userRepository.markDeleting(UUID.randomUUID())).isZero();
-
-    }
-
-    @Test
-    void markDeleting_thenHibernateUpdateOfStaleEntity_throwsOptimisticLockingFailure() {
+    void scheduleDeletion_thenHibernateUpdateOfStaleEntity_throwsOptimisticLockingFailure() {
 
         UUID existingId = UUID.randomUUID();
 
@@ -540,10 +562,11 @@ class UserRepositoryIT {
 
         User staleUser = userRepository.findById(existingId).orElseThrow();
 
-        userRepository.markDeleting(existingId);
+        userRepository.scheduleDeletion(existingId, "PT5M");
 
         staleUser.setDisplayName(UserFixtures.LEON_KENNEDY_NAME);
 
+        // A PATCH that read the row before the schedule committed cannot overwrite it afterwards.
         assertThatThrownBy(() -> userRepository.saveAndFlush(staleUser))
                 .isInstanceOf(OptimisticLockingFailureException.class);
 
@@ -553,7 +576,7 @@ class UserRepositoryIT {
     }
 
     @Test
-    void markDeleting_afterEntityWasLoaded_detachesItAndFindByIdRereadsTheRow() {
+    void scheduleDeletion_afterEntityWasLoaded_detachesItAndFindByIdRereadsTheRow() {
 
         UUID existingId = UUID.randomUUID();
 
@@ -561,7 +584,7 @@ class UserRepositoryIT {
 
         User loadedBefore = userRepository.findById(existingId).orElseThrow();
 
-        userRepository.markDeleting(existingId);
+        userRepository.scheduleDeletion(existingId, "PT5M");
 
         User loadedAfter = userRepository.findById(existingId).orElseThrow();
 
@@ -569,8 +592,128 @@ class UserRepositoryIT {
         assertThat(loadedBefore.getStatus()).isEqualTo(UserStatus.ACTIVE);
         assertThat(loadedBefore.getVersion()).isZero();
         assertThat(loadedAfter).isNotSameAs(loadedBefore);
-        assertThat(loadedAfter.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(loadedAfter.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
         assertThat(loadedAfter.getVersion()).isOne();
+
+    }
+
+    // --- cancelDeletion: DELETION_SCHEDULED -> ACTIVE, only while the deadline lies ahead
+
+    @Test
+    void cancelDeletion_scheduledUserBeforeTheDeadline_returnsOneAndClearsTheDeletionColumns() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, FAR_FUTURE);
+
+        int cancelled = userRepository.cancelDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(cancelled).isOne();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(user.getVersion()).isOne();
+        assertThat(user.getDeletionRequestedAt()).isNull();
+        assertThat(user.getDeletionScheduledFor()).isNull();
+        assertThat(user.getDeletionStartedAt()).isNull();
+        assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000));
+
+    }
+
+    // The deadline is the user's last moment: after it the promoter owns the row, even before it has run.
+    @Test
+    void cancelDeletion_scheduledUserAfterTheDeadline_returnsZeroAndChangesNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, YEAR_2000);
+
+        int cancelled = userRepository.cancelDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(cancelled).isZero();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getDeletionScheduledFor()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    // The comparison is strict: a deadline equal to the database's "now" is already too late. (A zero grace period is
+    // refused by the service; the query itself is exercised here with PT0S, whose deadline is exactly the request time
+    // and, in this one transaction, exactly CURRENT_TIMESTAMP.)
+    @Test
+    void cancelDeletion_deadlineEqualToNow_returnsZero() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+        userRepository.scheduleDeletion(existingId, "PT0S");
+
+        assertThat(userRepository.cancelDeletion(existingId)).isZero();
+
+    }
+
+    @Test
+    void cancelDeletion_activeUser_returnsZeroAndChangesNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        int cancelled = userRepository.cancelDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(cancelled).isZero();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getUpdatedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = UserStatus.class, names = {"DELETING", "DELETED"})
+    void cancelDeletion_deletingOrDeletedUser_returnsZeroAndChangesNothing(UserStatus status) {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, status);
+
+        int cancelled = userRepository.cancelDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(cancelled).isZero();
+        assertThat(user.getStatus()).isEqualTo(status);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));
+
+    }
+
+    @Test
+    void cancelDeletion_unknownId_returnsZero() {
+
+        assertThat(userRepository.cancelDeletion(UUID.randomUUID())).isZero();
+
+    }
+
+    // Cancelling must leave a row the table accepts as ACTIVE (no deletion timestamps), so the user can schedule again.
+    @Test
+    void scheduleCancelSchedule_cycle_worksAndEndsAtVersionThree() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        assertThat(userRepository.scheduleDeletion(existingId, "PT5M")).isOne();
+        assertThat(userRepository.cancelDeletion(existingId)).isOne();
+        assertThat(userRepository.scheduleDeletion(existingId, "PT5M")).isOne();
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
+        assertThat(user.getVersion()).isEqualTo(3L);
 
     }
 
@@ -707,6 +850,21 @@ class UserRepositoryIT {
         assertThatThrownBy(() -> userRepository.syncEmail(existingId, "example.com"))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("chk_users_email");
+
+    }
+
+    // A DELETION_SCHEDULED row asked for in the year 2000 whose deadline is the given time: a far-future one can
+    // still be cancelled, YEAR_2000 itself is long overdue.
+    private void insertScheduledUser(UUID id, String scheduledFor) {
+
+        jdbc.update("""
+                        INSERT INTO users
+                        (id, email, display_name, status, deletion_requested_at, deletion_scheduled_for, created_at, updated_at)
+                        VALUES
+                        (?, ?, ?, 'DELETION_SCHEDULED', ?::timestamptz, ?::timestamptz, ?::timestamptz, ?::timestamptz)
+                        """,
+                id, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, YEAR_2000, scheduledFor,
+                YEAR_2000, YEAR_2000);
 
     }
 

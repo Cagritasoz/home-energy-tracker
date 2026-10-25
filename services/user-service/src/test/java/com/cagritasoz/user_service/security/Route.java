@@ -17,6 +17,9 @@ public record Route(String label, HttpMethod method, String path, boolean custom
 
     public static final Route ME_DELETE = new Route("DELETE /users/me", HttpMethod.DELETE, "/api/v1/users/me", true, 202);
 
+    public static final Route ME_CANCEL_DELETION = new Route("POST /users/me/deletion/cancel", HttpMethod.POST,
+            "/api/v1/users/me/deletion/cancel", true, 204);
+
     public static final Route ADMIN_LIST = new Route("GET /admin/users", HttpMethod.GET, "/api/v1/admin/users", false, 200);
 
     public static final Route ADMIN_ONE = new Route("GET /admin/users/{id}", HttpMethod.GET,
@@ -26,11 +29,11 @@ public record Route(String label, HttpMethod method, String path, boolean custom
 
     public static final Route UNKNOWN = new Route("GET /unknown", HttpMethod.GET, "/api/v1/unknown", false, 404);
 
-    public static final List<Route> CUSTOMER = List.of(ME_GET, ME_PATCH, ME_DELETE);
+    public static final List<Route> CUSTOMER = List.of(ME_GET, ME_PATCH, ME_DELETE, ME_CANCEL_DELETION);
 
     public static final List<Route> ADMIN = List.of(ADMIN_LIST, ADMIN_ONE, ADMIN_UNMAPPED);
 
-    public static final List<Route> ALL = List.of(ME_GET, ME_PATCH, ME_DELETE, ADMIN_LIST, ADMIN_ONE, ADMIN_UNMAPPED, UNKNOWN);
+    public static final List<Route> ALL = List.of(ME_GET, ME_PATCH, ME_DELETE, ME_CANCEL_DELETION, ADMIN_LIST, ADMIN_ONE, ADMIN_UNMAPPED, UNKNOWN);
 
     public MockHttpServletRequestBuilder request() {
         MockHttpServletRequestBuilder builder = MockMvcRequestBuilders.request(method, path);

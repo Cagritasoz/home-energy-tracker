@@ -9,6 +9,7 @@ import com.cagritasoz.user_service.dto.UserAdminResponse;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.exception.GlobalExceptionHandler;
 import com.cagritasoz.user_service.service.UserAdminService;
+import com.cagritasoz.user_service.service.UserDeletionService;
 import com.cagritasoz.user_service.service.UserProvisioningService;
 import com.cagritasoz.user_service.service.UserService;
 import com.cagritasoz.user_service.testsupport.LocalJwks;
@@ -57,7 +58,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         GlobalExceptionHandler.class,
         MethodSecurityTest.PermitAllUrlRules.class // Import the modified FilterChain instead of production FilterChain.
 })
-@MockitoBean(types = {UserService.class, UserAdminService.class, UserProvisioningService.class})
+@MockitoBean(types = {UserService.class, UserDeletionService.class, UserAdminService.class, UserProvisioningService.class})
 class MethodSecurityTest {
 
     private static final UUID USER_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -106,6 +107,9 @@ class MethodSecurityTest {
     private UserService userService;
 
     @Autowired
+    private UserDeletionService userDeletionService;
+
+    @Autowired
     private UserAdminService userAdminService;
 
     @Autowired
@@ -123,6 +127,7 @@ class MethodSecurityTest {
     void stubServices() {
         when(userService.getUser(any())).thenReturn(UserResponse.builder().build());
         when(userService.updateUser(any(), any())).thenReturn(UserResponse.builder().build());
+        when(userDeletionService.scheduleDeletion(any())).thenReturn(UserResponse.builder().build());
         when(userAdminService.getUser(any())).thenReturn(UserAdminResponse.builder().build());
         when(userAdminService.listUsers(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of()));
     }
@@ -153,7 +158,7 @@ class MethodSecurityTest {
         call(route, TestTokens.admin(ADMIN_ID).bearer())
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/forbidden"));
-        verifyNoInteractions(userService);
+        verifyNoInteractions(userService, userDeletionService);
     }
 
     @ParameterizedTest
@@ -177,7 +182,7 @@ class MethodSecurityTest {
     @MethodSource("customerRoutes")
     void userController_rejectsAnAnonymousCallerWith401(Route route) throws Exception {
         call(route, null).andExpect(status().isUnauthorized());
-        verifyNoInteractions(userService);
+        verifyNoInteractions(userService, userDeletionService);
     }
 
     @ParameterizedTest

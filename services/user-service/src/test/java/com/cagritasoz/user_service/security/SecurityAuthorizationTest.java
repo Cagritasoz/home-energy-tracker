@@ -208,5 +208,6 @@ class SecurityAuthorizationTest extends SecuritySliceTest {
 
         call(Route.ME_PATCH, bearer).andExpect(status().isOk());
         call(Route.ME_DELETE, bearer).andExpect(status().isAccepted());
+        call(Route.ME_CANCEL_DELETION, bearer).andExpect(status().isNoContent());
     }
 }

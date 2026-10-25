@@ -71,20 +71,83 @@ public class OutboxService {
 
     }
 
+    // occurredAt is when the user asked; the data carries the deadline the database computed.
     @Transactional(propagation = Propagation.MANDATORY)
-    public void recordUserDeletionRequested(User user) {
+    public void recordUserDeletionScheduled(User user) {
 
-        EventEnvelope<UserDeletionRequestedData> envelope = EventEnvelope.<UserDeletionRequestedData>builder()
+        EventEnvelope<UserDeletionScheduledData> envelope = EventEnvelope.<UserDeletionScheduledData>builder()
                 .eventId(UUID.randomUUID())
-                .eventType(UserEventType.USER_DELETION_REQUESTED.value())
-                .schemaVersion(UserDeletionRequestedData.SCHEMA_VERSION)
+                .eventType(UserEventType.USER_DELETION_SCHEDULED.value())
+                .schemaVersion(UserDeletionScheduledData.SCHEMA_VERSION)
                 .aggregateType(UserEvents.AGGREGATE_TYPE)
                 .aggregateId(user.getId().toString())
                 .aggregateVersion(user.getVersion())
                 .occurredAt(user.getDeletionRequestedAt())
                 .producer(UserEvents.PRODUCER)
-                .data(UserDeletionRequestedData.builder()
+                .data(UserDeletionScheduledData.builder()
+                        .deletionScheduledFor(user.getDeletionScheduledFor())
                         .build())
+                .build();
+
+        write(envelope);
+
+    }
+
+    // The cancel clears the deletion columns, so the only time left on the row is the trigger-stamped updated_at.
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordUserDeletionCancelled(User user) {
+
+        EventEnvelope<UserDeletionCancelledData> envelope = EventEnvelope.<UserDeletionCancelledData>builder()
+                .eventId(UUID.randomUUID())
+                .eventType(UserEventType.USER_DELETION_CANCELLED.value())
+                .schemaVersion(UserDeletionCancelledData.SCHEMA_VERSION)
+                .aggregateType(UserEvents.AGGREGATE_TYPE)
+                .aggregateId(user.getId().toString())
+                .aggregateVersion(user.getVersion())
+                .occurredAt(user.getUpdatedAt())
+                .producer(UserEvents.PRODUCER)
+                .data(UserDeletionCancelledData.builder().build())
+                .build();
+
+        write(envelope);
+
+    }
+
+    // Written by the promoter when the grace period ends (a later step); occurredAt is deletion_started_at, not
+    // updated_at, because updated_at moves on any later update of the row.
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordUserDeletionStarted(User user) {
+
+        EventEnvelope<UserDeletionStartedData> envelope = EventEnvelope.<UserDeletionStartedData>builder()
+                .eventId(UUID.randomUUID())
+                .eventType(UserEventType.USER_DELETION_STARTED.value())
+                .schemaVersion(UserDeletionStartedData.SCHEMA_VERSION)
+                .aggregateType(UserEvents.AGGREGATE_TYPE)
+                .aggregateId(user.getId().toString())
+                .aggregateVersion(user.getVersion())
+                .occurredAt(user.getDeletionStartedAt())
+                .producer(UserEvents.PRODUCER)
+                .data(UserDeletionStartedData.builder().build())
+                .build();
+
+        write(envelope);
+
+    }
+
+    // Written by the finalizer (a later step); occurredAt is deleted_at.
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordUserDeletionFinalized(User user) {
+
+        EventEnvelope<UserDeletionFinalizedData> envelope = EventEnvelope.<UserDeletionFinalizedData>builder()
+                .eventId(UUID.randomUUID())
+                .eventType(UserEventType.USER_DELETION_FINALIZED.value())
+                .schemaVersion(UserDeletionFinalizedData.SCHEMA_VERSION)
+                .aggregateType(UserEvents.AGGREGATE_TYPE)
+                .aggregateId(user.getId().toString())
+                .aggregateVersion(user.getVersion())
+                .occurredAt(user.getDeletedAt())
+                .producer(UserEvents.PRODUCER)
+                .data(UserDeletionFinalizedData.builder().build())
                 .build();
 
         write(envelope);

@@ -2,8 +2,13 @@ package com.cagritasoz.user_service.controller;
 
 import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
+import com.cagritasoz.user_service.exception.AccountDeletedException;
+import com.cagritasoz.user_service.exception.DeletionDeadlinePassedException;
+import com.cagritasoz.user_service.exception.DeletionScheduledException;
 import com.cagritasoz.user_service.exception.GlobalExceptionHandler;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
+import com.cagritasoz.user_service.model.UserStatus;
+import com.cagritasoz.user_service.service.UserDeletionService;
 import com.cagritasoz.user_service.service.UserService;
 import com.cagritasoz.user_service.testsupport.JwtFixtures;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
@@ -23,15 +28,18 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -49,6 +57,9 @@ class UserControllerTest {
 
     @Mock
     private UserService userService;
+
+    @Mock
+    private UserDeletionService userDeletionService;
 
     private MockMvc mockMvc;
 
@@ -83,7 +94,7 @@ class UserControllerTest {
         // Left out, Spring falls back to treating the Jwt parameter as a @ModelAttribute to be
         // data-bound from request parameters instead, and blows up trying to construct one via
         // reflection - confirmed by actually running this test without the line below first.
-        mockMvc = MockMvcBuilders.standaloneSetup(new UserController(userService))
+        mockMvc = MockMvcBuilders.standaloneSetup(new UserController(userService, userDeletionService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .build();
@@ -121,6 +132,7 @@ class UserControllerTest {
                 .email(UserFixtures.ARTHUR_MORGAN_EMAIL)
                 .displayName(UserFixtures.ARTHUR_MORGAN_NAME)
                 .timezone("UTC")
+                .status(UserStatus.ACTIVE)
                 .build();
 
         when(userService.getUser(USER_ID)).thenReturn(response);
@@ -129,7 +141,10 @@ class UserControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(USER_ID.toString()))
                 .andExpect(jsonPath("$.email").value(UserFixtures.ARTHUR_MORGAN_EMAIL))
-                .andExpect(jsonPath("$.displayName").value(UserFixtures.ARTHUR_MORGAN_NAME));
+                .andExpect(jsonPath("$.displayName").value(UserFixtures.ARTHUR_MORGAN_NAME))
+                // The frontend shows the deletion banner and Cancel button from these two; null must still be present.
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.deletionScheduledFor").value((Object) null));
 
         // Proves the id came from the token's own "sub" claim, not from anywhere else in the
         // request - USER_ID here is literally JwtFixtures.validUser's subject.
@@ -234,12 +249,92 @@ class UserControllerTest {
     }
 
     @Test
-    void deleteMe_returns202() throws Exception {
+    void getMe_scheduledAccount_returnsTheDeadline() throws Exception {
+
+        when(userService.getUser(USER_ID)).thenReturn(scheduledResponse());
+
+        mockMvc.perform(get("/api/v1/users/me"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"))
+                .andExpect(jsonPath("$.deletionScheduledFor").value("2026-02-14T23:50:00Z"));
+    }
+
+    @Test
+    void updateMe_scheduledAccount_returns409() throws Exception {
+
+        when(userService.updateUser(any(), any())).thenThrow(new DeletionScheduledException());
+
+        mockMvc.perform(patch("/api/v1/users/me")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"aMorgan\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/deletion-scheduled"))
+                .andExpect(jsonPath("$.title").value("Deletion scheduled"));
+    }
+
+    // Starting the grace period deletes nothing, so the answer is 202 with the account as it now stands.
+    @Test
+    void deleteMe_schedulesTheDeletionAndReturns202WithTheDeadline() throws Exception {
+
+        when(userDeletionService.scheduleDeletion(USER_ID)).thenReturn(scheduledResponse());
 
         mockMvc.perform(delete("/api/v1/users/me"))
                 .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"))
+                .andExpect(jsonPath("$.deletionScheduledFor").value("2026-02-14T23:50:00Z"));
+
+        verify(userDeletionService).scheduleDeletion(USER_ID);
+    }
+
+    @Test
+    void deleteMe_accountAlreadyDeleting_returns410() throws Exception {
+
+        when(userDeletionService.scheduleDeletion(USER_ID)).thenThrow(new AccountDeletedException());
+
+        mockMvc.perform(delete("/api/v1/users/me"))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/account-deleted"));
+    }
+
+    @Test
+    void cancelDeletion_returns204WithNoBody() throws Exception {
+
+        mockMvc.perform(post("/api/v1/users/me/deletion/cancel"))
+                .andExpect(status().isNoContent())
                 .andExpect(content().string(""));
 
-        verify(userService).requestDeletion(USER_ID);
+        verify(userDeletionService).cancelDeletion(USER_ID);
+    }
+
+    @Test
+    void cancelDeletion_afterTheDeadline_returns409() throws Exception {
+
+        doThrow(new DeletionDeadlinePassedException()).when(userDeletionService).cancelDeletion(USER_ID);
+
+        mockMvc.perform(post("/api/v1/users/me/deletion/cancel"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/deletion-deadline-passed"))
+                .andExpect(jsonPath("$.title").value("Deletion deadline passed"));
+    }
+
+    @Test
+    void cancelDeletion_accountAlreadyDeleting_returns410() throws Exception {
+
+        doThrow(new AccountDeletedException()).when(userDeletionService).cancelDeletion(USER_ID);
+
+        mockMvc.perform(post("/api/v1/users/me/deletion/cancel"))
+                .andExpect(status().isGone());
+    }
+
+    private UserResponse scheduledResponse() {
+
+        return UserResponse.builder()
+                .id(USER_ID)
+                .email(UserFixtures.ARTHUR_MORGAN_EMAIL)
+                .displayName(UserFixtures.ARTHUR_MORGAN_NAME)
+                .timezone("UTC")
+                .status(UserStatus.DELETION_SCHEDULED)
+                .deletionScheduledFor(Instant.parse("2026-02-14T23:50:00Z"))
+                .build();
     }
 }

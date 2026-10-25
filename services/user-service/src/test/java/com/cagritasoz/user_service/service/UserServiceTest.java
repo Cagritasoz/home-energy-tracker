@@ -4,16 +4,20 @@ import com.cagritasoz.user_service.dto.UpdateUserRequest;
 import com.cagritasoz.user_service.dto.UserResponse;
 import com.cagritasoz.user_service.entity.User;
 import com.cagritasoz.user_service.exception.AccountDeletedException;
+import com.cagritasoz.user_service.exception.DeletionScheduledException;
 import com.cagritasoz.user_service.exception.UserNotFoundException;
 import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -75,6 +79,21 @@ class UserServiceTest {
         assertThat(response.id()).isEqualTo(USER_ID);
         assertThat(response.email()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
         assertThat(response.displayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(response.status()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(response.deletionScheduledFor()).isNull();
+    }
+
+    // What the frontend decides the banner and the Cancel button from.
+    @Test
+    void getUser_scheduledAccount_returnsStatusAndDeadline() {
+        Instant deadline = Instant.parse("2026-02-14T23:50:00Z");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID)
+                .status(UserStatus.DELETION_SCHEDULED).deletionScheduledFor(deadline).build()));
+
+        UserResponse response = userService.getUser(USER_ID);
+
+        assertThat(response.status()).isEqualTo(UserStatus.DELETION_SCHEDULED);
+        assertThat(response.deletionScheduledFor()).isEqualTo(deadline);
     }
 
     @Test
@@ -132,74 +151,32 @@ class UserServiceTest {
         verifyNoInteractions(outboxService);
     }
 
-    // The race: PATCH passed the interceptor while ACTIVE, DELETE then committed, and only now does updateUser read the row.
+    // The race: PATCH passed the interceptor while ACTIVE, a deletion request then committed, and only now does
+    // updateUser read the row. Scheduled means read-only (409, cancel and retry); DELETING or DELETED means gone (410).
     @Test
-    void updateUser_deletingAccount_throwsAccountDeletedAndWritesNothing() {
+    void updateUser_scheduledAccount_throwsDeletionScheduledAndWritesNothing() {
         when(userRepository.findById(USER_ID))
-                .thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).status(UserStatus.DELETING).build()));
+                .thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).status(UserStatus.DELETION_SCHEDULED).build()));
+
+        assertThatThrownBy(() -> userService.updateUser(USER_ID,
+                UpdateUserRequest.builder().displayName(UserFixtures.LEON_KENNEDY_NAME).build()))
+                .isInstanceOf(DeletionScheduledException.class);
+
+        verify(userRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(outboxService);
+    }
+
+    @ParameterizedTest(name = "status={0}")
+    @EnumSource(value = UserStatus.class, names = {"DELETING", "DELETED"})
+    void updateUser_deletingOrDeletedAccount_throwsAccountDeletedAndWritesNothing(UserStatus status) {
+        when(userRepository.findById(USER_ID))
+                .thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).status(status).build()));
 
         assertThatThrownBy(() -> userService.updateUser(USER_ID,
                 UpdateUserRequest.builder().displayName(UserFixtures.LEON_KENNEDY_NAME).build()))
                 .isInstanceOf(AccountDeletedException.class);
 
         verify(userRepository, never()).saveAndFlush(any());
-        verifyNoInteractions(outboxService);
-    }
-
-    @Test
-    void requestDeletion_activeAccount_stopsAfterMarkDeletingWinsAndRecordsDeletionRequestedEvent() {
-        // markDeleting returning 1 means "this call won the compare-and-set" (see its own comment
-        // in UserRepository) - requestDeletion must not go on to call existsById in that case.
-        when(userRepository.markDeleting(USER_ID)).thenReturn(1);
-        // The winner re-reads the row (markDeleting is a native query, so this is a fresh read, not
-        // the same stale entity anyone might have loaded earlier) to build the event from what the
-        // database actually holds now.
-        User deletingUser = activeUser();
-        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(deletingUser));
-
-        userService.requestDeletion(USER_ID);
-
-        verify(userRepository, never()).existsById(any());
-        verify(outboxService).recordUserDeletionRequested(deletingUser);
-    }
-
-    // Should be impossible inside one transaction (markDeleting just committed this same row), so
-    // it's reported as an error rather than swallowed - the deterministic, single-threaded shape of
-    // the same trap UserProvisioningServiceTest's provision() tests guard against.
-    @Test
-    void requestDeletion_userMissingAfterMarkDeletingWon_throwsIllegalState() {
-        when(userRepository.markDeleting(USER_ID)).thenReturn(1);
-        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> userService.requestDeletion(USER_ID))
-                .isInstanceOf(IllegalStateException.class);
-
-        verifyNoInteractions(outboxService);
-    }
-
-    @Test
-    void requestDeletion_alreadyDeleting_isASilentNoOp() {
-        // 0 rows changed, but the user does exist - requestDeletion must return quietly, not throw.
-        when(userRepository.markDeleting(USER_ID)).thenReturn(0);
-        when(userRepository.existsById(USER_ID)).thenReturn(true);
-
-        userService.requestDeletion(USER_ID);
-        // Nothing to assert on a void, idempotent call beyond "it didn't throw" - if it had thrown,
-        // this test would already have failed before reaching here.
-
-        // Nothing changed, so nothing is announced - a request that loses the race, or finds the
-        // account already past ACTIVE, must not emit a second UserDeletionRequested.
-        verifyNoInteractions(outboxService);
-    }
-
-    @Test
-    void requestDeletion_unknownId_throwsUserNotFound() {
-        when(userRepository.markDeleting(USER_ID)).thenReturn(0);
-        when(userRepository.existsById(USER_ID)).thenReturn(false);
-
-        assertThatThrownBy(() -> userService.requestDeletion(USER_ID))
-                .isInstanceOf(UserNotFoundException.class);
-
         verifyNoInteractions(outboxService);
     }
 }

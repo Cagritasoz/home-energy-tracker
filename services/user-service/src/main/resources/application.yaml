@@ -118,6 +118,14 @@ app:
        batch-size: 1000
        cron: "0 0 3 * * *"
 
+  user:
+    deletion:
+      # How long an account stays DELETION_SCHEDULED (read-only, cancellable) between the user's request and the
+      # moment the deletion becomes irreversible. Must be positive or the service refuses to start. 5 minutes keeps
+      # development quick; production is 14 to 30 days. The deadline is computed by the database when the user
+      # asks, so changing this later moves no deadline that was already set.
+      grace: 5m
+
   security:
     # Required for audience mapper
     required-audience: user-service
