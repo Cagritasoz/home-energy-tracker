@@ -254,7 +254,7 @@ Gauges, in the style of the existing outbox metrics: number of scheduled deletio
 
 **The token's email is not synced into the row after provisioning.** Email edit is admin-only in Keycloak, so every supported change goes through user-service, which then knows about it. The token's `email` is read once, to create the row for a newly registered user (together with the `email_verified` check). Writing a token's email into the database later is wrong in principle (a token is a copy of Keycloak's state up to 5 minutes old) and wrong in practice: right after a legitimate change the user's old token would flip the email back.
 
-What replaces it is detection: a counter `user.email.token.mismatch` when a verified token email differs from the row (expect up to 5 minutes of noise after a legitimate change; the address is never logged). A real divergence (an operator editing the address in Keycloak's console) is repaired by an explicit admin action, not by every request.
+What replaces it is detection: a counter `user.email.token.mismatch` when a verified token email differs from the row (expect up to 5 minutes of noise after a legitimate change; the address is never logged). A real divergence (an operator editing the address in Keycloak's console) is repaired by an explicit admin action, not by every request. Implemented in step 5d: the comparison ignores case (Keycloak lower-cases every address, and `uq_users_email` treats the two as the same), skips an unverified or missing claim, and the counter has no tags.
 
 ### 10.2 The lock
 

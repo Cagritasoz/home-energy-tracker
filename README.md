@@ -38,7 +38,7 @@ The owner of "who is this user". It is the only service that talks to the identi
 ### What it does
 
 - **Identity comes from Keycloak.** There is no sign-up or password code here. The service is an OAuth2 resource server and validates the JWT: issuer, audience (`aud` must contain `user-service`) and realm roles (`user`, `admin`).
-- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. A verified email change in Keycloak is picked up on the next request and emits `UserUpdated`.
+- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. The token's email is only read to create the row: a verified token email that differs from the stored one is counted (`user.email.token.mismatch`) and never written back, because a token is a copy of Keycloak's state up to 5 minutes old.
 - **Self-service API.** View and update your profile, request deletion of your account.
 - **Admin API.** Paged read-only listing of users, for staff accounts (role `admin`). An admin is an identity in Keycloak only: admins have no row in the `users` table and cause no events, and calling the customer API with an admin token returns `403`.
 - **Account deletion** is a multi-service saga (choreography, no central orchestrator) with a grace period. `DELETE /me` moves the account to `DELETION_SCHEDULED` and emits `UserDeletionScheduled`: for the configured grace (`app.user.deletion.grace`) the account stays readable but read-only, and `POST /me/deletion/cancel` brings it back to `ACTIVE`. After the deadline the promoter, the Keycloak delete and the finaliser (not implemented yet) move it through `DELETING` to `DELETED`. A `DELETING` or `DELETED` account gets `410 Gone` on every endpoint.
@@ -65,7 +65,7 @@ Topic `user.events.v1`, keyed by user id, JSON envelope defined in the shared [`
 | Event | When |
 |---|---|
 | `UserRegistered` | First time a user is seen |
-| `UserUpdated` | Profile or verified email changed |
+| `UserUpdated` | Profile changed (`PATCH /me`) |
 | `UserDeletionScheduled` | `DELETE /me` accepted (carries the deadline) |
 | `UserDeletionCancelled` | A scheduled deletion was cancelled |
 | `UserDeletionStarted` | The grace period ended (declared, emitted by the promoter in a later step) |
