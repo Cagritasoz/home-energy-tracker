@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.UUID;
 
 @Repository
@@ -53,4 +54,36 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for > CURRENT_TIMESTAMP
             """, nativeQuery = true)
     int cancelDeletion(@Param("id") UUID id);
+
+    // The promoter's work list: scheduled accounts whose grace period is over, oldest deadline first. A plain read
+    // that locks nothing; every row is claimed again, by its own compare-and-set, in promoteDeletion. Served by
+    // the partial index idx_users_deletion_scheduled.
+    @Query(value = """
+            SELECT id FROM users
+            WHERE status = 'DELETION_SCHEDULED' AND deletion_scheduled_for <= CURRENT_TIMESTAMP
+            ORDER BY deletion_scheduled_for, id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<UUID> findIdsDueForPromotion(@Param("limit") int limit);
+
+    // DELETION_SCHEDULED -> DELETING, the moment the deletion becomes irreversible. A compare-and-set like the
+    // other transitions, and it is also what keeps the promoter and a cancel apart: both UPDATE the same row, so
+    // whichever gets the row lock first commits, and the other one - blocked until then - re-evaluates its WHERE
+    // against the committed row and finds 0 rows to change. The deadline is checked again here (the list above
+    // may be stale by the time the row is reached).
+    //
+    // The personal data goes in the same statement as the status, so no committed row is DELETING and still holds
+    // an address: the email becomes deleted+<id>@invalid (unique per id, so it never collides in uq_users_email and
+    // never blocks a real address), the display name a fixed text. timezone is not personal enough to scrub.
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE users
+            SET status = 'DELETING',
+                email = 'deleted+' || id || '@invalid',
+                display_name = 'Deleted user',
+                deletion_started_at = CURRENT_TIMESTAMP,
+                version = version + 1
+            WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for <= CURRENT_TIMESTAMP
+            """, nativeQuery = true)
+    int promoteDeletion(@Param("id") UUID id);
 }

@@ -33,6 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // answer, the event written and the status the row ends in are all checked against the table in the design doc.
 @SpringBootTest(properties = {
         "app.outbox.relay.interval-ms=86400000",
+        "app.user.deletion.promoter.interval-ms=86400000",
         "app.outbox.purge.cron=-"
 })
 @AutoConfigureMockMvc

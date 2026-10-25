@@ -126,6 +126,19 @@ app:
       # asks, so changing this later moves no deadline that was already set.
       grace: 5m
 
+      # The services that must confirm the cleanup of each deletion that starts from now on: a comma-separated list
+      # of lower-case names (they must match the participant's ack handler, checked at start-up once the handlers
+      # exist). Copied into user_deletion_participants when the deletion starts, so changing it never alters a
+      # deletion already running. Empty while no participant service exists: the saga then completes by time alone.
+      required-participants: ""
+
+      # The promoter starts the deletion of accounts whose grace period is over (DELETION_SCHEDULED -> DELETING,
+      # personal data scrubbed, UserDeletionStarted written). One batch per tick. It makes no external call, so a
+      # short interval is cheap: a few seconds in development, tens of seconds in production.
+      promoter:
+        interval-ms: 3000
+        batch-size: 50
+
   security:
     # Required for audience mapper
     required-audience: user-service

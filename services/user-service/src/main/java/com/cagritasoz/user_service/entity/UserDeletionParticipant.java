@@ -13,8 +13,8 @@ import java.time.Instant;
 
 // A service that must confirm it has removed the user's data before the deletion can finish (V13). The promoter
 // writes the rows when the deletion starts; the ack consumer sets acked_at; only a migration sets waived_at.
-// Read-only for now: the admin view shows who is still missing. The rows are changed by native updates later,
-// never through this entity.
+// Read-only through this entity: the admin view shows who is still missing. The promoter inserts the rows with a
+// native query (UserDeletionParticipantRepository.insertRequired) and the ack consumer will update them the same way.
 @Entity
 @Table(name = "user_deletion_participants")
 @Data

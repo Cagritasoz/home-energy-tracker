@@ -113,7 +113,7 @@ public class OutboxService {
 
     }
 
-    // Written by the promoter when the grace period ends (a later step); occurredAt is deletion_started_at, not
+    // Written by the promoter (DeletionPromotionService) when the grace period ends; occurredAt is deletion_started_at, not
     // updated_at, because updated_at moves on any later update of the row.
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordUserDeletionStarted(User user) {

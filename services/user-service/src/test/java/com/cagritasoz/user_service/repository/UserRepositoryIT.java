@@ -717,6 +717,186 @@ class UserRepositoryIT {
 
     }
 
+    // --- findIdsDueForPromotion: the promoter's work list
+
+    @Test
+    void findIdsDueForPromotion_returnsOnlyScheduledUsersWhoseDeadlineHasPassed() {
+
+        UUID overdue = UUID.randomUUID();
+        UUID stillInGrace = UUID.randomUUID();
+        UUID active = UUID.randomUUID();
+        UUID deleting = UUID.randomUUID();
+        UUID deleted = UUID.randomUUID();
+
+        insertScheduledUser(overdue, YEAR_2000);
+        insertScheduledUser(stillInGrace, FAR_FUTURE);
+        insertUser(active, emailOf(active), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+        insertUser(deleting, emailOf(deleting), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        insertUser(deleted, emailOf(deleted), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
+
+        assertThat(userRepository.findIdsDueForPromotion(10)).containsExactly(overdue);
+
+    }
+
+    // Oldest deadline first, ties by id (the fixed ids are written out, see their declaration), and the limit
+    // cuts the list after that order, so a backlog is worked off from its oldest end.
+    @Test
+    void findIdsDueForPromotion_ordersByDeadlineThenIdAndHonoursTheLimit() {
+
+        insertScheduledUser(TIED_HIGH_ID, "2000-01-02T00:00:00Z");
+        insertScheduledUser(TIED_LOW_ID, "2000-01-02T00:00:00Z");
+        insertScheduledUser(NEWEST_ID, "2000-01-01T12:00:00Z"); // The earliest deadline, though the highest id.
+
+        assertThat(userRepository.findIdsDueForPromotion(10)).containsExactly(NEWEST_ID, TIED_LOW_ID, TIED_HIGH_ID);
+        assertThat(userRepository.findIdsDueForPromotion(2)).containsExactly(NEWEST_ID, TIED_LOW_ID);
+
+    }
+
+    // "Due" includes the moment itself (<=), while cancelling needs the deadline strictly ahead (>): at exactly the
+    // deadline the account can no longer be cancelled and is already due, so no instant belongs to neither.
+    @Test
+    void findIdsDueForPromotion_deadlineEqualToNow_isDue() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+        userRepository.scheduleDeletion(existingId, "PT0S");
+
+        assertThat(userRepository.findIdsDueForPromotion(10)).containsExactly(existingId);
+
+    }
+
+    @Test
+    void findIdsDueForPromotion_nobodyDue_returnsAnEmptyList() {
+
+        assertThat(userRepository.findIdsDueForPromotion(10)).isEmpty();
+
+    }
+
+    // --- promoteDeletion: DELETION_SCHEDULED -> DELETING once the deadline has passed
+
+    @Test
+    void promoteDeletion_overdueScheduledUser_returnsOneAndScrubsThePersonalData() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, YEAR_2000);
+
+        int promoted = userRepository.promoteDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(promoted).isOne();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(user.getEmail()).isEqualTo("deleted+" + existingId + "@invalid");
+        assertThat(user.getDisplayName()).isEqualTo("Deleted user");
+        assertThat(user.getVersion()).isOne();
+        assertThat(user.getDeletionStartedAt()).isAfter(Instant.parse(YEAR_2000)); // Stamped by the database.
+        assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000)); // The V6 trigger ran.
+
+        // What the user asked for and when it was due stays on the row as history; nothing else is touched.
+        assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getDeletionScheduledFor()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getKeycloakDeletedAt()).isNull();
+        assertThat(user.getDeletedAt()).isNull();
+        assertThat(user.getTimezone()).isEqualTo("UTC");
+
+    }
+
+    // The grace period is the user's: a row that is not overdue is never promoted, whatever the work list said.
+    @Test
+    void promoteDeletion_beforeTheDeadline_returnsZeroAndChangesNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, FAR_FUTURE);
+
+        int promoted = userRepository.promoteDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(promoted).isZero();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
+        assertThat(user.getEmail()).isEqualTo(emailOf(existingId));
+        assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(user.getVersion()).isZero();
+        assertThat(user.getDeletionStartedAt()).isNull();
+
+    }
+
+    @Test
+    void promoteDeletion_deadlineEqualToNow_returnsOne() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+        userRepository.scheduleDeletion(existingId, "PT0S");
+
+        assertThat(userRepository.promoteDeletion(existingId)).isOne();
+
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = UserStatus.class, names = {"ACTIVE", "DELETING", "DELETED"})
+    void promoteDeletion_userNotScheduled_returnsZeroAndKeepsTheAddress(UserStatus status) {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, status);
+
+        int promoted = userRepository.promoteDeletion(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(promoted).isZero();
+        assertThat(user.getStatus()).isEqualTo(status);
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
+        assertThat(user.getDisplayName()).isEqualTo(UserFixtures.ARTHUR_MORGAN_NAME);
+        assertThat(user.getVersion()).isZero();
+
+    }
+
+    @Test
+    void promoteDeletion_unknownId_returnsZero() {
+
+        assertThat(userRepository.promoteDeletion(UUID.randomUUID())).isZero();
+
+    }
+
+    // Running the same promotion again (a second promoter, or a retry) finds the row DELETING and does nothing.
+    @Test
+    void promoteDeletion_calledTwice_promotesOnce() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, YEAR_2000);
+
+        assertThat(userRepository.promoteDeletion(existingId)).isOne();
+        assertThat(userRepository.promoteDeletion(existingId)).isZero();
+        assertThat(userRepository.findById(existingId).orElseThrow().getVersion()).isOne();
+
+    }
+
+    // The scrubbed address is unique per id, so any number of accounts can be DELETING at once, and the real address
+    // is free for a new account as soon as the old one is promoted (uq_users_email would have refused it before).
+    @Test
+    void promoteDeletion_releasesTheAddressAndNeverCollidesWithAnotherPromotedUser() {
+
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+
+        insertScheduledUser(first, YEAR_2000);
+        insertScheduledUser(second, YEAR_2000);
+
+        assertThat(userRepository.promoteDeletion(first)).isOne();
+        assertThat(userRepository.promoteDeletion(second)).isOne();
+
+        int reregistered = userRepository.insertIgnoringConflict(UUID.randomUUID(), emailOf(first), UserFixtures.LEON_KENNEDY_NAME);
+
+        assertThat(reregistered).isOne();
+
+    }
+
     // A DELETION_SCHEDULED row asked for in the year 2000 whose deadline is the given time: a far-future one can
     // still be cancelled, YEAR_2000 itself is long overdue.
     private void insertScheduledUser(UUID id, String scheduledFor) {
@@ -727,8 +907,15 @@ class UserRepositoryIT {
                         VALUES
                         (?, ?, ?, 'DELETION_SCHEDULED', ?::timestamptz, ?::timestamptz, ?::timestamptz, ?::timestamptz)
                         """,
-                id, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, YEAR_2000, scheduledFor,
+                id, emailOf(id), UserFixtures.ARTHUR_MORGAN_NAME, YEAR_2000, scheduledFor,
                 YEAR_2000, YEAR_2000);
+
+    }
+
+    // One address per id: uq_users_email allows no two live accounts with the same one.
+    private static String emailOf(UUID id) {
+
+        return "user." + id + "@example.com";
 
     }
 
