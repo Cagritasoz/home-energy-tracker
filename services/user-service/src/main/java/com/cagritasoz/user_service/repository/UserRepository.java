@@ -53,16 +53,4 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for > CURRENT_TIMESTAMP
             """, nativeQuery = true)
     int cancelDeletion(@Param("id") UUID id);
-
-    // "clearAutomatically = true": Clear the JPA persistence context after the modifying query. This detaches
-    // EVERY entity loaded so far in the transaction, including the User the caller passed in - don't use it afterwards.
-    // "flushAutomatically = true": Flush Hibernate's pending changes to the database before executing this query.
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query(value = """
-            UPDATE users
-            SET email = :email,
-                version = version + 1
-            WHERE id = :id AND status = 'ACTIVE' AND email <> :email
-            """, nativeQuery = true)
-    int syncEmail(@Param("id") UUID id, @Param("email") String email);
 }

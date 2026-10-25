@@ -110,12 +110,14 @@ class OutboxServiceIT {
     }
 
     @Test
-    void recordUserUpdated_afterSyncEmail_writesRowStampedWithUpdatedAtAndNewVersion() {
+    void recordUserUpdated_afterAnUpdate_writesRowStampedWithUpdatedAtAndNewVersion() {
 
         UUID id = UUID.randomUUID();
 
         insertActiveUserIn2000(id);
-        userRepository.syncEmail(id, UserFixtures.LEON_KENNEDY_EMAIL);
+        // What a profile change does to the row: new content, version + 1 (the trigger stamps updated_at).
+        jdbc.update("UPDATE users SET email = ?, version = version + 1 WHERE id = ?", UserFixtures.LEON_KENNEDY_EMAIL, id);
+        entityManager.clear();
         User user = userRepository.findById(id).orElseThrow();
 
         outboxService.recordUserUpdated(user);

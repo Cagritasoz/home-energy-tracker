@@ -5,7 +5,8 @@ import com.cagritasoz.user_service.exception.AccountDeletedException;
 import com.cagritasoz.user_service.exception.EmailNotVerifiedException;
 import com.cagritasoz.user_service.exception.MissingIdentityClaimException;
 import com.cagritasoz.user_service.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,12 +15,25 @@ import java.util.Objects;
 import java.util.UUID;
 
 @Service
-@RequiredArgsConstructor
 public class UserProvisioningService {
 
     private final UserRepository userRepository;
 
     private final OutboxService outboxService;
+
+    // Counts requests whose verified token email differs from the stored one (see detectEmailMismatch). No tags:
+    // the address itself must never end up in a metric.
+    private final Counter emailMismatchCounter;
+
+    public UserProvisioningService(UserRepository userRepository, OutboxService outboxService, MeterRegistry meterRegistry) {
+
+        this.userRepository = userRepository;
+        this.outboxService = outboxService;
+        this.emailMismatchCounter = Counter.builder("user.email.token.mismatch")
+                .description("Requests whose verified token email differs from the email stored for the user")
+                .register(meterRegistry);
+
+    }
 
     @Transactional
     // TODO: Evaluate whether it is worth it for other services to use the found/provisioned user without firing a separate "findById" query.
@@ -38,7 +52,7 @@ public class UserProvisioningService {
 
         }
 
-        syncEmailIfChanged(user, token);
+        detectEmailMismatch(user, token);
     }
 
     private User provision(UUID sub, Jwt token) {
@@ -89,49 +103,32 @@ public class UserProvisioningService {
         return user;
     }
 
-    // Runs on every request, not just provisioning: a user can change their email in Keycloak long
-    // after their account row was first created, and nothing else ever looks at it again
-    // otherwise. The common case (no change) only compares against the already-loaded entity - no
-    // extra query. Only when the email really changed does it write, re-read the row and record a
-    // UserUpdated event. Requiring email_verified here too stops an in-progress Keycloak email change
-    // (old address still active until the new one is confirmed) from overwriting the row early.
-    private void syncEmailIfChanged(User user, Jwt token) {
+    // The token's email is read to create the row and never written into it afterwards. An email changes only through
+    // user-service, which then knows about it, and a token is a copy of Keycloak's state up to 5 minutes old: syncing
+    // it into the row would flip a freshly changed email back for as long as an old token is in use.
+    //
+    // What replaces the sync is detection. A verified token email that differs from the row is counted, so a real
+    // divergence (an operator editing the address in Keycloak's console) shows up in a metric and is repaired by an
+    // explicit admin action, not by every request. Expecting some noise for up to 5 minutes after a legitimate change.
+    //
+    // Case is ignored: Keycloak lower-cases every address while the row keeps what it was given, and
+    // uq_users_email treats the two as the same address anyway. An unverified or missing claim says nothing about the
+    // account, so it is not counted. The address is never logged and never a tag of the metric.
+    private void detectEmailMismatch(User user, Jwt token) {
 
         String email = token.getClaimAsString("email");
 
-        if (email == null || email.isBlank() || email.equals(user.getEmail())) {
+        if (email == null || email.isBlank() || !Boolean.TRUE.equals(token.getClaimAsBoolean("email_verified"))) {
 
             return;
 
         }
 
-        if (!Boolean.TRUE.equals(token.getClaimAsBoolean("email_verified"))) {
+        if (!email.equalsIgnoreCase(user.getEmail())) {
 
-            return;
+            emailMismatchCounter.increment();
 
         }
-
-        // syncEmail returns the rows changed: 1 = this request changed the email, 0 = nothing to do
-        // (a concurrent request already synced it, or the account is no longer ACTIVE) - and then
-        // there is no event either.
-        //
-        // It is a native UPDATE, so it bypasses Hibernate: the User that ensureUsable() loaded stays in
-        // the persistence context with the OLD email, version and updated_at, and a plain findById would
-        // just hand that stale object back. "clearAutomatically = true" on syncEmail() empties the
-        // context after the update, so the findById below really queries the table.
-        int updated = userRepository.syncEmail(user.getId(), email);
-
-        if(updated == 0) {
-            return;
-        }
-
-        // The event needs the row as it is NOW: the new version, the trigger-stamped updated_at, and the
-        // current display name and timezone, which a concurrent request may have changed since this
-        // request loaded the user.
-        User syncedUser = userRepository.findById(user.getId())
-                .orElseThrow(() -> new IllegalStateException("User " + user.getId() + " missing after syncing email."));
-
-        outboxService.recordUserUpdated(syncedUser);
 
     }
 

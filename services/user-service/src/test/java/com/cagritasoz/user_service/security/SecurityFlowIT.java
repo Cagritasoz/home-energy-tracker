@@ -3,6 +3,7 @@ package com.cagritasoz.user_service.security;
 import com.cagritasoz.user_service.testsupport.LocalJwks;
 import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.TestTokens;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -54,6 +55,9 @@ class SecurityFlowIT {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     @BeforeEach
     void emptyTables() {
         jdbc.execute("TRUNCATE TABLE outbox_events, user_deletion_participants, users RESTART IDENTITY CASCADE");
@@ -73,6 +77,10 @@ class SecurityFlowIT {
             request.header(HttpHeaders.AUTHORIZATION, bearer);
         }
         return mockMvc.perform(request);
+    }
+
+    private double mismatchCount() {
+        return meterRegistry.get("user.email.token.mismatch").counter().count();
     }
 
     private Integer userRows() {
@@ -111,26 +119,38 @@ class SecurityFlowIT {
         assertThat(outboxEventTypes()).containsExactly("UserRegistered");
     }
 
+    // A token is a copy of Keycloak's state up to 5 minutes old, so its email is read to create the row and never
+    // written into it afterwards: the request still succeeds, the row keeps its email, no event is written, and the
+    // divergence is counted.
     @Test
-    void changedVerifiedEmailInTheToken_updatesTheRowAndEmitsUserUpdated() throws Exception {
+    void changedVerifiedEmailInTheToken_isNotWritten_butCounted() throws Exception {
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isOk());
+        double before = mismatchCount();
 
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).claim("email", "new.address@example.com").bearer())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.email").value("new.address@example.com"));
+                .andExpect(jsonPath("$.email").value("arthur.morgan@example.com"));
 
-        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserUpdated");
+        assertThat(mismatchCount()).isEqualTo(before + 1);
+        assertThat(jdbc.queryForObject("SELECT email FROM users WHERE id = ?", String.class, CUSTOMER_ID))
+                .isEqualTo("arthur.morgan@example.com");
+        assertThat(outboxEventTypes()).containsExactly("UserRegistered");
     }
 
+    // An unverified claim says nothing about the account, and Keycloak's lower-casing is no divergence.
     @Test
-    void changedButUnverifiedEmailInTheToken_isIgnored() throws Exception {
+    void unverifiedOrDifferentlyCasedEmailInTheToken_isNotCounted() throws Exception {
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isOk());
+        double before = mismatchCount();
 
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID)
                 .claim("email", "new.address@example.com").claim("email_verified", false).bearer())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("arthur.morgan@example.com"));
+        call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).claim("email", "ARTHUR.MORGAN@EXAMPLE.COM").bearer())
+                .andExpect(status().isOk());
 
+        assertThat(mismatchCount()).isEqualTo(before);
         assertThat(outboxEventTypes()).containsExactly("UserRegistered");
     }
 

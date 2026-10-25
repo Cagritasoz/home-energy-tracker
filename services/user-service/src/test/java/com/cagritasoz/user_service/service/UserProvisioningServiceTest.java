@@ -8,6 +8,9 @@ import com.cagritasoz.user_service.model.UserStatus;
 import com.cagritasoz.user_service.repository.UserRepository;
 import com.cagritasoz.user_service.testsupport.JwtFixtures;
 import com.cagritasoz.user_service.testsupport.UserFixtures;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,7 +19,6 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -34,6 +36,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,8 +48,24 @@ public class UserProvisioningServiceTest {
     @Mock
     private OutboxService outboxService;
 
-    @InjectMocks
+    // A real registry: the mismatch counter is read back in the tests.
+    private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
+
     private UserProvisioningService provisioningService;
+
+    @BeforeEach
+    void setUp() {
+
+        provisioningService = new UserProvisioningService(userRepository, outboxService, meterRegistry);
+
+    }
+
+    // How many requests so far carried a verified token email that differs from the stored one.
+    private double mismatches() {
+
+        return meterRegistry.get("user.email.token.mismatch").counter().count();
+
+    }
 
     private static final UUID USER_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
@@ -64,14 +83,14 @@ public class UserProvisioningServiceTest {
     void ensureUsable_deletingOrDeletedAccount_throwsAccountDeleted(UserStatus status) {
 
         User user = UserFixtures.activeUser().id(USER_ID).status(status).build();
-        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
 
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
 
         assertThatThrownBy(() -> provisioningService.ensureUsable(token))
                 .isInstanceOf(AccountDeletedException.class);
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
-        verify(userRepository, never()).syncEmail(any(), any());
+        assertThat(mismatches()).as("a gone account is rejected before anything is compared").isZero();
         verifyNoInteractions(outboxService);
     }
 
@@ -89,89 +108,78 @@ public class UserProvisioningServiceTest {
         verifyNoInteractions(outboxService);
     }
 
-    // The single "do write" case stays its own @Test rather than a row in the source above: it
-    // asserts the opposite outcome (verify called, with exact arguments), and mixing both
-    // outcomes into one parameterized method would need an if/else inside the test body -
-    // conditional logic in a test is exactly where a wrong branch can silently pass.
+    // The token's email is read to create the row and never written into it afterwards (a token is a copy of
+    // Keycloak's state up to 5 minutes old, and writing it back would flip a freshly changed email back). A verified
+    // email that differs is only counted: no update, no event, not even a second read of the row.
     @Test
-    void ensureUsable_activeUser_verifiedChangedEmail_syncsEmailAndRecordsUpdatedEvent() {
-
-        User user = UserFixtures.activeUser().id(USER_ID).build();
-        // What the table holds after the update: the new email and the version the UPDATE bumped.
-        User syncedUser = UserFixtures.activeUser().id(USER_ID).email(NEW_EMAIL).version(1L).build();
-        Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
-
-        // Two reads: ensureUsable's own, and the re-read after the update (syncEmail clears the
-        // persistence context, so the second one really returns the fresh row).
-        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user), Optional.of(syncedUser));
-
-        // 1 = this request changed the email, so it must announce it.
-        when(userRepository.syncEmail(USER_ID, NEW_EMAIL)).thenReturn(1);
-
-        provisioningService.ensureUsable(token);
-
-        verify(userRepository).syncEmail(USER_ID, NEW_EMAIL);
-
-        // The event is built from the re-read row, not from the stale user loaded at the start.
-        verify(outboxService).recordUserUpdated(syncedUser);
-    }
-
-    // syncEmail returned 0: nothing changed (a concurrent request synced the email first, or the account
-    // stopped being ACTIVE meanwhile). No event, and no pointless re-read of the row either -
-    // findById is called only once, by ensureUsable itself. The 0 is stubbed explicitly even though it is
-    // a mock's default, so the intent is visible.
-    @Test
-    void ensureUsable_activeUser_emailSyncChangedNothing_doesNotRecordEvent() {
+    void ensureUsable_verifiedTokenEmailDiffersFromTheRow_countsItAndWritesNothing() {
 
         User user = UserFixtures.activeUser().id(USER_ID).build();
         Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
 
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
-        when(userRepository.syncEmail(USER_ID, NEW_EMAIL)).thenReturn(0);
 
         provisioningService.ensureUsable(token);
 
-        verify(userRepository).syncEmail(USER_ID, NEW_EMAIL);
+        assertThat(mismatches()).isEqualTo(1.0);
+        assertThat(user.getEmail()).isEqualTo(UserFixtures.ARTHUR_MORGAN_EMAIL);
         verify(userRepository, times(1)).findById(USER_ID);
+        verifyNoMoreInteractions(userRepository);
         verifyNoInteractions(outboxService);
     }
 
-    // The email was updated (1 row) but the re-read finds no row: should be impossible inside one
-    // transaction, so it is reported as an error rather than swallowed, and nothing is recorded.
+    // Every request with a differing token counts, which is why a legitimate change makes noise for up to 5 minutes.
     @Test
-    void ensureUsable_activeUser_syncedUserMissingAfterUpdate_throwsIllegalState() {
+    void ensureUsable_verifiedTokenEmailDiffersOnEveryRequest_countsEveryRequest() {
 
         User user = UserFixtures.activeUser().id(USER_ID).build();
         Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
 
-        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user), Optional.empty());
-        when(userRepository.syncEmail(USER_ID, NEW_EMAIL)).thenReturn(1);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
 
-        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
-                .isInstanceOf(IllegalStateException.class);
-        verifyNoInteractions(outboxService);
+        provisioningService.ensureUsable(token);
+        provisioningService.ensureUsable(token);
+        provisioningService.ensureUsable(token);
+
+        assertThat(mismatches()).isEqualTo(3.0);
     }
 
-    // Every way syncEmailIfChanged can decide "don't write". Unlike the status test above, the
-    // thing varying here isn't one enum value - it's the whole shape of the token (which claims
-    // are present, and with what values) - so @EnumSource can't express it. @MethodSource points
-    // JUnit at a static factory method (by name) that returns one entry per run instead.
-    // Each entry is wrapped in Named.named("label", value): the test method still receives the
-    // plain Jwt, but {0} in the report shows the label rather than Jwt's unreadable toString(),
-    // so a failure says e.g. "[email changed, email_verified=false]".
-    static Stream<Named<Jwt>> tokensThatMustNotSyncEmail() {
+    // A scheduled account is let through, so a divergence on it is detected like any other.
+    @Test
+    void ensureUsable_deletionScheduledAccountWithDifferingEmail_isCounted() {
+
+        User user = UserFixtures.activeUser().id(USER_ID).status(UserStatus.DELETION_SCHEDULED).build();
+        Jwt token = JwtFixtures.validUser(USER_ID).claim("email", NEW_EMAIL).build();
+
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        provisioningService.ensureUsable(token);
+
+        assertThat(mismatches()).isEqualTo(1.0);
+    }
+
+    // Every shape of token that must NOT count. Unlike the status test above, the thing varying here isn't one enum
+    // value - it's the whole shape of the token (which claims are present, and with what values) - so @EnumSource
+    // can't express it. @MethodSource points JUnit at a static factory method (by name) that returns one entry per
+    // run instead. Each entry is wrapped in Named.named("label", value): the test method still receives the plain
+    // Jwt, but {0} in the report shows the label rather than Jwt's unreadable toString(), so a failure says e.g.
+    // "[email changed, email_verified=false]".
+    static Stream<Named<Jwt>> tokensThatMustNotCountAsAMismatch() {
         return Stream.of(
                 // Stored email (UserFixtures default) equals the token's (JwtFixtures default) -
                 // both are Arthur Morgan's address.
                 Named.named("email unchanged",
                         JwtFixtures.validUser(USER_ID).build()),
-                // No email claim at all - nothing to sync to; the stored value is kept as-is.
+                // Keycloak lower-cases every address while the row keeps what it was given, and the unique index
+                // treats the two as the same address: a difference of case alone is no divergence.
+                Named.named("same address in upper case",
+                        JwtFixtures.validUser(USER_ID).claim("email", UserFixtures.ARTHUR_MORGAN_EMAIL.toUpperCase(java.util.Locale.ROOT)).build()),
+                // No email claim at all - nothing to compare.
                 Named.named("email claim missing",
                         JwtFixtures.minimalToken(USER_ID).claim("email_verified", true).build()),
-                // email_verified=true is deliberately included here, unlike the other "changed"
-                // cases below: without it, this would pass even if syncEmailIfChanged had no
-                // blank check at all (it would be rejected by the verified check instead), which
-                // wouldn't actually prove the isBlank() guard does anything.
+                // email_verified=true is deliberately included here, unlike the other "changed" cases below:
+                // without it, this would pass even if the blank check did not exist (it would be skipped by the
+                // verified check instead), which wouldn't actually prove the isBlank() guard does anything.
                 Named.named("email changed, email is blank",
                         JwtFixtures.minimalToken(USER_ID)
                                 .claim("email", " ")
@@ -188,8 +196,8 @@ public class UserProvisioningServiceTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("tokensThatMustNotSyncEmail")
-    void ensureUsable_activeUser_doesNotSyncEmail(Jwt token) {
+    @MethodSource("tokensThatMustNotCountAsAMismatch")
+    void ensureUsable_activeUser_tokenThatSaysNothingAboutADivergence_isNotCounted(Jwt token) {
 
         User user = UserFixtures.activeUser().id(USER_ID).build();
 
@@ -197,11 +205,10 @@ public class UserProvisioningServiceTest {
 
         provisioningService.ensureUsable(token);
 
-        // never() + any(): "syncEmail was not called with ANY arguments" - stronger than checking
-        // it wasn't called with one specific email.
-        verify(userRepository, never()).syncEmail(any(), any());
+        assertThat(mismatches()).isZero();
 
-        // An existing user is not a new registration.
+        // An existing user is not a new registration, and nothing is written.
+        verifyNoMoreInteractions(userRepository);
         verifyNoInteractions(outboxService);
     }
 
@@ -240,9 +247,9 @@ public class UserProvisioningServiceTest {
         // not one built locally - so it carries the database's version and created_at.
         verify(outboxService).recordUserRegistered(provisionedUser);
 
-        // provisionedUser's email already matches the token's (both fixtures default to the same
-        // address) - syncEmailIfChanged has nothing to change, so it must not write either.
-        verify(userRepository, never()).syncEmail(any(), any());
+        // provisionedUser's email matches the token's (both fixtures default to the same address), so a newly
+        // created user is not a divergence either.
+        assertThat(mismatches()).isZero();
     }
 
     // The request that LOSES the provisioning race: a concurrent request already created the row, so
@@ -370,7 +377,6 @@ public class UserProvisioningServiceTest {
                 .isInstanceOf(MissingIdentityClaimException.class)
                 .hasMessage("email");
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
-        verify(userRepository, never()).syncEmail(any(), any());
         verifyNoInteractions(outboxService);
     }
 
@@ -384,7 +390,6 @@ public class UserProvisioningServiceTest {
         assertThatThrownBy(() -> provisioningService.ensureUsable(token))
                 .isInstanceOf(EmailNotVerifiedException.class);
         verify(userRepository, never()).insertIgnoringConflict(any(), any(), any());
-        verify(userRepository, never()).syncEmail(any(), any());
         verifyNoInteractions(outboxService);
     }
 
@@ -397,6 +402,5 @@ public class UserProvisioningServiceTest {
 
         assertThatThrownBy(() -> provisioningService.ensureUsable(token))
                 .isInstanceOf(IllegalStateException.class);
-        verify(userRepository, never()).syncEmail(any(), any());
     }
 }
