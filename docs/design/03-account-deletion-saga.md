@@ -78,7 +78,7 @@ Four migrations, one concern each: `V11__users_add_deletion_schedule_and_schedul
   - `keycloak_deleted_at IS NULL OR status IN ('DELETING','DELETED')`
   - `deletion_scheduled_for >= deletion_requested_at` (equal means "delete now", used by admin-initiated deletion)
 - Indexes: `idx_users_deletion_scheduled (deletion_scheduled_for) WHERE status = 'DELETION_SCHEDULED'` (the promoter's scan) and `idx_users_deleting (deletion_started_at) WHERE status = 'DELETING'` (finaliser, Keycloak job, watchdog), both partial so they stay small whatever the number of accounts. The old `idx_users_deleting` on `deletion_requested_at` is replaced.
-- Backfill before the constraints go on: a row already in `DELETING` or `DELETED` gets `deletion_scheduled_for` and `deletion_started_at` equal to its `deletion_requested_at` (an immediate deletion; the `DELETED` rows need the value too, because the started-at rule covers them). Until the grace period is implemented, `DELETE /users/me` does the same: it sets requested, scheduled and started to one instant.
+- Backfill before the constraints go on: a row already in `DELETING` or `DELETED` gets `deletion_scheduled_for` and `deletion_started_at` equal to its `deletion_requested_at` (an immediate deletion; the `DELETED` rows need the value too, because the started-at rule covers them).
 
 `user_deletion_participants` (new):
 
@@ -127,7 +127,7 @@ UPDATE users SET status = 'ACTIVE',
    AND deletion_scheduled_for > CURRENT_TIMESTAMP;
 ```
 
-After a zero-row result the code re-reads the row to tell "already in the target state" (idempotent success) from "too late" (409 / 410). The user's identity always comes from the token's `sub`; a user can never name another user (an admin acts on `{id}` through admin endpoints only).
+After a zero-row result the code re-reads the row to tell "already in the target state" (idempotent success) from "too late" (409 / 410). `GET /users/me` and the 202 of `DELETE` carry the same account representation (`status`, `deletionScheduledFor`), so the frontend can show the date straight away; the schedule's own zero-row case that finds the row `ACTIVE` again (someone scheduled and cancelled in between) is answered 409 `concurrent-modification`, because neither "scheduled" nor "not scheduled" would be true. The user's identity always comes from the token's `sub`; a user can never name another user (an admin acts on `{id}` through admin endpoints only).
 
 ## 7. Events
 
