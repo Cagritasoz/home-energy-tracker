@@ -190,16 +190,25 @@ Password and MFA changes stay available in Keycloak (a compromised account has t
 
 ### 8.3 Promotion
 
-The promoter turns an overdue `DELETION_SCHEDULED` row into `DELETING` in one transaction: scrub the email (`deleted+<id>@invalid`) and display name (`Deleted user`), `status = 'DELETING'`, `deletion_started_at = CURRENT_TIMESTAMP`, `version + 1`, one `user_deletion_participants` row for each service in the configured required set, and the `UserDeletionStarted` outbox row. It makes no external call, so it cannot half-fail.
+The promoter turns an overdue `DELETION_SCHEDULED` row into `DELETING`, one account per transaction: scrub the email (`deleted+<id>@invalid`) and display name (`Deleted user`), `status = 'DELETING'`, `deletion_started_at = CURRENT_TIMESTAMP`, `version + 1`, one `user_deletion_participants` row for each service in the configured required set, and the `UserDeletionStarted` outbox row. It makes no external call, so it cannot half-fail.
 
 ```sql
+-- the work list: a plain read, locks nothing
 SELECT id FROM users
  WHERE status = 'DELETION_SCHEDULED' AND deletion_scheduled_for <= CURRENT_TIMESTAMP
- ORDER BY deletion_scheduled_for
- LIMIT :batch
- FOR UPDATE SKIP LOCKED;
--- then, per row: UPDATE ... WHERE id = :id AND status = 'DELETION_SCHEDULED'
+ ORDER BY deletion_scheduled_for, id
+ LIMIT :batch;
+
+-- then, for each id, in a transaction of its own: the claim
+UPDATE users SET status = 'DELETING', email = 'deleted+' || id || '@invalid', display_name = 'Deleted user',
+                 deletion_started_at = CURRENT_TIMESTAMP, version = version + 1
+ WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for <= CURRENT_TIMESTAMP;
+-- 0 rows: someone else changed the row first; skip it. 1 row: insert the participant rows, write the event.
 ```
+
+Each account has its own transaction, and the compare-and-set `UPDATE` is the claim (an earlier version of this design took a whole batch under `FOR UPDATE SKIP LOCKED` in one transaction). The reason is failure isolation: the oldest account is always first in the work list, so one account that cannot be promoted would fail the batch's single transaction on every tick and starve all the others. With a transaction per account the failure is logged (user id and the root cause's class, never the message, which a database error can fill with the row's contents), counted in `user.deletion.promotion.failures`, and the loop continues. The row lock the `UPDATE` takes does what `SKIP LOCKED` did for exclusion: a second promoter (or a cancel) working on the same account waits for the first to commit and then matches nothing. Two promoters walking the same list therefore serialise on the row locks instead of splitting it; that is harmless, and the wasted work is bounded by the batch size.
+
+The names in `app.user.deletion.required-participants` are checked when the service starts (the table's name rule, no duplicates): a name the table would reject would otherwise fail every promotion, always on the first row of the list.
 
 Cancel and promote exclude each other through the row lock and the status check: whichever commits first wins and the other sees zero rows. The time comparison only decides who may *start*; being late by one transaction's duration is harmless.
 
@@ -239,7 +248,7 @@ A required participant that never confirms stalls finalisation for that user, an
 
 ### 8.7 Observability
 
-Gauges, in the style of the existing outbox metrics: number of scheduled deletions, age of the oldest `DELETING` row, age of the oldest row still waiting for its Keycloak delete, pending confirmations per participant, circuit-breaker state of the Keycloak client; a counter for token-vs-row email mismatches (section 10). Dead-letter topics of every consumer need their own alert, because a poison `UserDeletionStarted` in a participant's dead-letter topic is the one failure that would otherwise be silent until the stall alert fires.
+The promoter has two counters already: `user.deletion.promoted` (accounts this instance moved to `DELETING`) and `user.deletion.promotion.failures` (promotions that threw; a rate above zero means an account is stuck). Gauges, in the style of the existing outbox metrics: number of scheduled deletions, age of the oldest `DELETING` row, age of the oldest row still waiting for its Keycloak delete, pending confirmations per participant, circuit-breaker state of the Keycloak client; a counter for token-vs-row email mismatches (section 10). Dead-letter topics of every consumer need their own alert, because a poison `UserDeletionStarted` in a participant's dead-letter topic is the one failure that would otherwise be silent until the stall alert fires.
 
 ## 9. Keycloak
 
@@ -350,7 +359,8 @@ The price of the last option comes from one requirement, that the email cannot c
 | Cancel racing the promoter | Row lock + status check: exactly one commits. The loser answers 409/410 (cancel) or skips the row (promoter). |
 | `PATCH` racing a schedule | The write rechecks the status in its own transaction (and `@Version` catches concurrent edits): it either completes before the schedule or answers 409. |
 | Schedule, cancel, schedule again in quick succession | Events are keyed by user, so ordered; consumers compare `aggregateVersion` with `>`; `UserDeletionStarted` wins over any older event. |
-| Two promoters, finalisers or Keycloak jobs | `FOR UPDATE SKIP LOCKED` hands disjoint rows to each; the Keycloak delete is idempotent anyway. |
+| Two promoters | Each account is claimed by a compare-and-set `UPDATE`: the second blocks on the row lock, then matches nothing. One promotion, one event, one set of participant rows (tested with staged transactions and with two whole jobs on one backlog). |
+| Two finalisers or Keycloak jobs | `FOR UPDATE SKIP LOCKED` hands disjoint rows to each; the Keycloak delete is idempotent anyway. |
 | Duplicate or redelivered ack | `WHERE acked_at IS NULL` plus `processed_events`: a no-op. |
 | First requests of a new user in parallel | `INSERT ... ON CONFLICT DO NOTHING`: one `UserRegistered`. |
 | A token still valid after promotion | user-service answers 410 from its own database. Other services rely on their tombstone, and the final sweep and quiet period cover requests in flight. |
@@ -395,7 +405,7 @@ The price of the last option comes from one requirement, that the email cannot c
 | `app.user.deletion.grace` | Time between request and irreversibility | 5 minutes or less | 14–30 days; never 0 (validated at startup) |
 | `app.user.deletion.quiet-period` | Wait after the Keycloak delete before finalising | 1 minute | 10 minutes |
 | `app.user.deletion.required-participants` | Services that must confirm each new deletion | empty until they exist | every service storing per-user data |
-| `app.user.deletion.promoter.*`, `.keycloak.*`, `.finaliser.*` | Interval and batch size of each job | a few seconds | tens of seconds |
+| `app.user.deletion.promoter.interval-ms` / `.batch-size` (implemented); `.keycloak.*`, `.finaliser.*` (planned) | Interval and batch size of each job; the promoter does one batch per tick | a few seconds | tens of seconds |
 | Keycloak admin client | Base URL, client id, secret (environment variable), timeouts, breaker | local container | real realm |
 
 The scheduler pool (`spring.task.scheduling.pool.size`) needs at least as many threads as jobs that can be busy at once: the relay, the promoter, the Keycloak job and the finaliser (plus the daily outbox purge).
