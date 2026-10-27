@@ -82,6 +82,30 @@ public class DeletionSchedulingService {
 
     }
 
+    // Not asked for by the account's owner: the account has to go now. Used when its Keycloak user no longer exists
+    // (an operator deleted it by hand), so nobody can log in to it and its address blocks a new registration. It is
+    // the same state machine with a grace period of zero: an ACTIVE account is scheduled with the deadline set to now
+    // and announced like any other schedule, and the promoter takes it on its next tick. An account that is already
+    // scheduled further out gets its deadline moved to now (no event; see bringDeletionForward). Anything else (due
+    // already, DELETING, DELETED, unknown) has nothing left to do, so this is idempotent and a no-op there.
+    @Transactional
+    public void scheduleForImmediateDeletion(UUID id) {
+
+        if (userRepository.scheduleDeletion(id, Duration.ZERO.toString()) == 1) {
+
+            User scheduled = userRepository.findById(id)
+                    .orElseThrow(() -> new IllegalStateException("User " + id + " missing after scheduleDeletion."));
+
+            outboxService.recordUserDeletionScheduled(scheduled);
+
+            return;
+
+        }
+
+        userRepository.bringDeletionForward(id);
+
+    }
+
     // Idempotent: cancelling an account that is not scheduled changes nothing and succeeds.
     @Transactional
     public void cancelDeletion(UUID id) {

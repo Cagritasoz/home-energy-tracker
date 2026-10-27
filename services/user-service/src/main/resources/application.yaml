@@ -30,8 +30,11 @@ spring:
 
   task:
     scheduling:
+      # One thread per scheduled job that can be busy at the same time: the relay, the promoter, the Keycloak delete job
+      # and (planned) the finaliser, plus the daily outbox purge. A fixedDelay job never overlaps itself, but a slow
+      # tick of one (a relay tick against a dead Kafka, a Keycloak call that times out) must not delay the others.
       pool:
-        size: 4
+        size: 6
 
   kafka:
     bootstrap-servers: localhost:9094
@@ -138,6 +141,45 @@ app:
       promoter:
         interval-ms: 3000
         batch-size: 50
+
+      # The Keycloak delete job: for every account that is DELETING, deletes its Keycloak user (404 = already gone) and
+      # records it. No database transaction is open during the call, so a slow Keycloak holds no connection. The batch
+      # is small because each account costs one HTTP call (up to the read timeout, twice, when Keycloak is slow); a
+      # tick ends early at the first call the open circuit breaker refuses.
+      keycloak:
+        interval-ms: 3000
+        batch-size: 20
+
+  # Keycloak's admin REST API, called with the service-account client user-service-admin (realm roles manage-users and
+  # view-users only). Reachable at base-url from where user-service runs: a container on the compose network would use
+  # http://keycloak:8080. The secret comes only from the environment (the same variable fills it into the realm when
+  # Keycloak imports it); the application does not start without it.
+  keycloak:
+    admin:
+      base-url: http://localhost:8080
+      realm: energy-tracker
+      client-id: user-service-admin
+      client-secret: ${USER_SERVICE_ADMIN_CLIENT_SECRET}
+      # Short on purpose: nothing here is worth waiting for, and the jobs retry on their next tick anyway.
+      connect-timeout: 1s
+      read-timeout: 3s
+      # The access token is renewed this long before it expires, so a call never starts with a token about to die.
+      token-refresh-margin: 30s
+      # One more attempt after a short pause, for failures that can be transient (a timeout, a dropped connection, a
+      # 5xx, a rejected token). Both calls are idempotent, which is what makes this safe.
+      retry:
+        max-attempts: 2
+        wait: 200ms
+      # Stops asking a Keycloak that keeps failing: with at least minimum-calls attempts in the last sliding-window-size,
+      # and failure-rate-threshold percent of them failed, calls are refused for wait-in-open-state, then half-open-calls
+      # probes decide whether to close again. Every attempt counts, retries included. The state is the gauge
+      # keycloak.admin.circuit.state.
+      circuit-breaker:
+        sliding-window-size: 10
+        minimum-calls: 5
+        failure-rate-threshold: 50
+        wait-in-open-state: 30s
+        half-open-calls: 2
 
   security:
     # Required for audience mapper

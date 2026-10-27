@@ -45,8 +45,8 @@ class UserSchemaIT {
     // ---------------------------------------------------------------------------------------------
 
     // pk_users on id. The second row has a different email on purpose, so the primary key is the only
-    // thing it can collide with. This is the guarantee insertIgnoringConflict's ON CONFLICT (id)
-    // depends on. Spring translates a unique violation (SQLSTATE 23505) to DuplicateKeyException.
+    // thing it can collide with. This is one of the two guarantees insertIgnoringConflict's
+    // ON CONFLICT DO NOTHING depends on (the other is uq_users_email). Spring translates a unique violation (SQLSTATE 23505) to DuplicateKeyException.
     @Test
     void pkUsers_duplicateId_isRejected() {
 

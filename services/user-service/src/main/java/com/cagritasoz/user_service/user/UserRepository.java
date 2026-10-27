@@ -5,18 +5,25 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface UserRepository extends JpaRepository<User, UUID> {
 
+    // Just-in-time provisioning insert. ON CONFLICT DO NOTHING without a target covers both unique indexes (id and email), and the
+    // caller reads the row back to tell them apart: 1 = inserted; 0 and the row with this id exists = a concurrent
+    // request created it first; 0 and no row with this id = the email belongs to another account (uq_users_email),
+    // which an exception would report just as well but would also abort the caller's transaction, and the caller
+    // wants to carry on and ask Keycloak about the other account.
     @Modifying
     @Query(value = """
             INSERT INTO users (id, email, display_name)
             VALUES (:id, :email, :displayName)
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """, nativeQuery = true)
     int insertIgnoringConflict(@Param("id") UUID id,
                        @Param("email") String email,
@@ -85,4 +92,52 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for <= CURRENT_TIMESTAMP
             """, nativeQuery = true)
     int promoteDeletion(@Param("id") UUID id);
+
+    // The work list of the Keycloak hard-delete job: accounts that are DELETING and whose Keycloak user has not been
+    // deleted yet, longest waiting first. A plain read like findIdsDueForPromotion, locking nothing: the job calls
+    // Keycloak between this read and the update below, and must not hold a row lock or a connection while it does.
+    // Served by idx_users_deleting.
+    @Query(value = """
+            SELECT id FROM users
+            WHERE status = 'DELETING' AND keycloak_deleted_at IS NULL
+            ORDER BY deletion_started_at, id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<UUID> findIdsPendingKeycloakDeletion(@Param("limit") int limit);
+
+    // Records that the Keycloak user is gone. A compare-and-set like the transitions, so two instances that both
+    // deleted the same user (harmless: the delete is idempotent) stamp it once, and the first one is the one that
+    // gets 1. It is @Transactional here because it is a single statement and nothing else needs to join it: the
+    // Keycloak call that precedes it must happen outside any transaction.
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE users
+            SET keycloak_deleted_at = CURRENT_TIMESTAMP,
+                version = version + 1
+            WHERE id = :id AND status = 'DELETING' AND keycloak_deleted_at IS NULL
+            """, nativeQuery = true)
+    int markKeycloakDeleted(@Param("id") UUID id);
+
+    // The account that holds an email address, if any: the one row uq_users_email lets hold it (lower-cased, not
+    // DELETED; a DELETING row has already been scrubbed, so it holds nothing). Used when a registration cannot be
+    // provisioned because the address belongs to another account.
+    @Query(value = """
+            SELECT * FROM users
+            WHERE lower(email) = lower(:email) AND status <> 'DELETED'
+            """, nativeQuery = true)
+    Optional<User> findLiveByEmail(@Param("email") String email);
+
+    // Moves the deadline of an already scheduled deletion to now, so the promoter takes the account on its next
+    // tick. For an account that is scheduled but whose Keycloak user is gone: waiting out the rest of the grace period
+    // would keep its address blocked for weeks. 0 = it is not scheduled, or already due. No event: the schedule was
+    // announced with the original date, and every consumer acts on UserDeletionStarted, not on the date.
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE users
+            SET deletion_scheduled_for = CURRENT_TIMESTAMP,
+                version = version + 1
+            WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for > CURRENT_TIMESTAMP
+            """, nativeQuery = true)
+    int bringDeletionForward(@Param("id") UUID id);
 }

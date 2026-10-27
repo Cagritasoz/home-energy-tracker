@@ -25,6 +25,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -81,6 +82,51 @@ class DeletionSchedulingServiceTest {
 
         assertThatCode(() -> new DeletionSchedulingService(userRepository, outboxService, Duration.ofNanos(1)))
                 .doesNotThrowAnyException();
+
+    }
+
+    // --- scheduleForImmediateDeletion (an orphaned account that has to go now)
+
+    // Same state machine as the customer's request, with a grace of zero (not the configured one): the account is
+    // scheduled with the deadline set to now, and announced like any other schedule.
+    @Test
+    void scheduleForImmediateDeletion_activeAccount_schedulesWithZeroGraceAndRecordsTheEvent() {
+
+        User scheduled = scheduledUser();
+        when(userRepository.scheduleDeletion(USER_ID, "PT0S")).thenReturn(1);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(scheduled));
+
+        service().scheduleForImmediateDeletion(USER_ID);
+
+        verify(outboxService).recordUserDeletionScheduled(scheduled);
+        verify(userRepository, never()).bringDeletionForward(USER_ID);
+
+    }
+
+    // Already scheduled further out: the deadline moves to now. Nothing is announced again.
+    @Test
+    void scheduleForImmediateDeletion_alreadyScheduled_movesTheDeadlineAndWritesNoEvent() {
+
+        when(userRepository.scheduleDeletion(USER_ID, "PT0S")).thenReturn(0);
+        when(userRepository.bringDeletionForward(USER_ID)).thenReturn(1);
+
+        service().scheduleForImmediateDeletion(USER_ID);
+
+        verify(userRepository).bringDeletionForward(USER_ID);
+        verifyNoInteractions(outboxService);
+
+    }
+
+    // Already due, already DELETING or DELETED, or gone: both updates match nothing, and that is fine.
+    @Test
+    void scheduleForImmediateDeletion_nothingLeftToDo_isANoOp() {
+
+        when(userRepository.scheduleDeletion(USER_ID, "PT0S")).thenReturn(0);
+        when(userRepository.bringDeletionForward(USER_ID)).thenReturn(0);
+
+        assertThatCode(() -> service().scheduleForImmediateDeletion(USER_ID)).doesNotThrowAnyException();
+
+        verifyNoInteractions(outboxService);
 
     }
 

@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.provisioning;
 
+import com.cagritasoz.user_service.deletion.OrphanEmailService;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.user.AccountDeletedException;
 import com.cagritasoz.user_service.user.User;
@@ -8,9 +9,10 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -20,23 +22,54 @@ public class UserProvisioningService {
 
     private final OutboxService outboxService;
 
+    private final OrphanEmailService orphanEmailService;
+
+    // The database part of ensureUsable runs in a transaction opened here, not by an annotation on the method, because
+    // the method as a whole must not be transactional: when the new account's address belongs to another account,
+    // Keycloak is asked about that account, and no transaction may be open during a call to Keycloak.
+    private final TransactionOperations transactions;
+
     // Counts requests whose verified token email differs from the stored one (see detectEmailMismatch). No tags:
     // the address itself must never end up in a metric.
     private final Counter emailMismatchCounter;
 
-    public UserProvisioningService(UserRepository userRepository, OutboxService outboxService, MeterRegistry meterRegistry) {
+    public UserProvisioningService(UserRepository userRepository,
+                                   OutboxService outboxService,
+                                   OrphanEmailService orphanEmailService,
+                                   TransactionOperations transactions,
+                                   MeterRegistry meterRegistry) {
 
         this.userRepository = userRepository;
         this.outboxService = outboxService;
+        this.orphanEmailService = orphanEmailService;
+        this.transactions = transactions;
         this.emailMismatchCounter = Counter.builder("user.email.token.mismatch")
                 .description("Requests whose verified token email differs from the email stored for the user")
                 .register(meterRegistry);
 
     }
 
-    @Transactional
-    // TODO: Evaluate whether it is worth it for other services to use the found/provisioned user without firing a separate "findById" query.
+    // Not @Transactional itself (see the field above): the database work is one transaction inside, and the one case
+    // that talks to Keycloak happens after that transaction has rolled back.
     public void ensureUsable(Jwt token) {
+
+        try {
+
+            transactions.executeWithoutResult(status -> ensureUsableInTransaction(token));
+
+        }
+        catch (EmailHeldByAnotherAccount e) {
+
+            // The transaction has rolled back (nothing was written); the new account cannot be created while another
+            // account holds its address. Find out whether that account is real, and tell the client what to do.
+            resolveEmailCollision(token);
+
+        }
+
+    }
+
+    // TODO: Evaluate whether it is worth it for other services to use the found/provisioned user without firing a separate "findById" query.
+    private void ensureUsableInTransaction(Jwt token) {
 
         UUID sub = UUID.fromString(Objects.requireNonNull(token.getSubject()));
 
@@ -85,8 +118,23 @@ public class UserProvisioningService {
         // it is not committed yet (a transaction always sees its own writes). The findById in
         // ensureUsable found nothing and Hibernate does not cache "not found", so this really
         // queries the table and returns the row with the database defaults (version 0, created_at).
-        User user = userRepository.findById(sub)
-                .orElseThrow(() -> new IllegalStateException("User " + sub + " missing after provisioning."));
+        Optional<User> row = userRepository.findById(sub);
+
+        if (row.isEmpty()) {
+
+            // Nothing inserted and no row with this id: that means that the insert was refused by uq_users_email, so the address
+            // belongs to a different account. (1 inserted row that cannot be read back would be a bug.)
+            if (inserted == 0) {
+
+                throw new EmailHeldByAnotherAccount();
+
+            }
+
+            throw new IllegalStateException("User " + sub + " missing after provisioning.");
+
+        }
+
+        User user = row.get();
 
         // The request with the losing transaction still gets the inserted user via fallback query. No deliberate 409.
         // Only true under READ COMMITTED which is the default.
@@ -100,6 +148,35 @@ public class UserProvisioningService {
         outboxService.recordUserRegistered(user);
 
         return user;
+    }
+
+    // The address of a new registration belongs to another account. Keycloak accepted the registration, so as far as it is
+    // concerned the address is free: the other account is either an orphan (its Keycloak user was deleted by hand), which
+    // is released here, or a real account whose address differs between Keycloak and our row, which only an operator can
+    // sort out. Either way this request cannot be served yet. A KeycloakUnavailableException from the lookup propagates
+    // (503): without an answer nothing is decided.
+    private void resolveEmailCollision(Jwt token) {
+
+        switch (orphanEmailService.releaseIfOrphaned(token.getClaimAsString("email"))) {
+
+            // The old account is on its way out (or was already gone): the address frees up within a promoter tick.
+            case ORPHAN_RELEASING, NO_HOLDER -> throw new EmailBeingReleasedException();
+
+            case HELD_BY_LIVE_ACCOUNT -> throw new EmailAlreadyInUseException();
+
+        }
+
+    }
+
+    // Thrown inside the transaction to roll it back and leave it; never reaches a caller. No stack trace: it is control
+    // flow, not an error.
+    private static final class EmailHeldByAnotherAccount extends RuntimeException {
+
+        EmailHeldByAnotherAccount() {
+
+            super(null, null, false, false);
+
+        }
     }
 
     // The token's email is read to create the row and never written into it afterwards. An email changes only through

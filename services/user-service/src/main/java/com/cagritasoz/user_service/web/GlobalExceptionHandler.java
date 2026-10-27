@@ -2,6 +2,9 @@ package com.cagritasoz.user_service.web;
 
 import com.cagritasoz.user_service.deletion.DeletionDeadlinePassedException;
 import com.cagritasoz.user_service.deletion.DeletionScheduledException;
+import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
+import com.cagritasoz.user_service.provisioning.EmailAlreadyInUseException;
+import com.cagritasoz.user_service.provisioning.EmailBeingReleasedException;
 import com.cagritasoz.user_service.provisioning.EmailNotVerifiedException;
 import com.cagritasoz.user_service.provisioning.MissingIdentityClaimException;
 import com.cagritasoz.user_service.user.AccountDeletedException;
@@ -43,6 +46,12 @@ import java.util.Objects;
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final String PROBLEM_TYPE_BASE = "https://home-energy-tracker/problems/";
+
+    // Seconds a client is told to wait. An orphaned account is promoted within a promoter tick or two; Keycloak or its
+    // circuit breaker needs longer to recover (the breaker stays open for 30 s by default).
+    private static final String RETRY_AFTER_RELEASING_SECONDS = "10";
+
+    private static final String RETRY_AFTER_UNAVAILABLE_SECONDS = "30";
 
     @ExceptionHandler(UserNotFoundException.class)
     public ProblemDetail handleUserNotFoundException(UserNotFoundException e) {
@@ -110,6 +119,32 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ProblemDetail handleMissingIdentityClaimException(MissingIdentityClaimException e) {
         return problem(HttpStatus.FORBIDDEN, "missing-identity-claim", "Missing identity claim",
                 "The access token is missing the required claim '" + e.getMessage() + "'.");
+    }
+
+    // The address of a new registration belongs to an account that no longer exists in Keycloak and is being removed:
+    // 503 with Retry-After, because the same request will succeed shortly. Not a 409: nothing about the request is wrong.
+    @ExceptionHandler(EmailBeingReleasedException.class)
+    public ResponseEntity<ProblemDetail> handleEmailBeingReleasedException(EmailBeingReleasedException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, RETRY_AFTER_RELEASING_SECONDS)
+                .body(problem(HttpStatus.SERVICE_UNAVAILABLE, "email-being-released", "Email being released", e.getMessage()));
+    }
+
+    // The address is held by an account that still exists in Keycloak: waiting does not help.
+    @ExceptionHandler(EmailAlreadyInUseException.class)
+    public ProblemDetail handleEmailAlreadyInUseException(EmailAlreadyInUseException e) {
+        return problem(HttpStatus.CONFLICT, "email-already-in-use", "Email already in use", e.getMessage());
+    }
+
+    // Keycloak could not be asked (down, slow, circuit open). Only the provisioning path reaches this from a request.
+    // The exception's own message stays in the log: it is ours and safe, but not written for a client.
+    @ExceptionHandler(KeycloakUnavailableException.class)
+    public ResponseEntity<ProblemDetail> handleKeycloakUnavailableException(KeycloakUnavailableException e) {
+        log.warn("The identity provider could not be asked: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, RETRY_AFTER_UNAVAILABLE_SECONDS)
+                .body(problem(HttpStatus.SERVICE_UNAVAILABLE, "identity-provider-unavailable", "Identity provider unavailable",
+                        "The identity provider is not available. Please try again shortly."));
     }
 
     // Last resort. The real cause is only logged, never sent to the client.

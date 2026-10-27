@@ -1,5 +1,7 @@
 package com.cagritasoz.user_service.provisioning;
 
+import com.cagritasoz.user_service.deletion.OrphanEmailService;
+import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import com.cagritasoz.user_service.testsupport.jwt.JwtFixtures;
@@ -21,6 +23,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -47,6 +53,13 @@ public class UserProvisioningServiceTest {
     @Mock
     private OutboxService outboxService;
 
+    @Mock
+    private OrphanEmailService orphanEmailService;
+
+    // Stands in for the real TransactionTemplate and remembers whether a transaction is open, so a test can check that
+    // the Keycloak-facing part runs after the transaction has ended.
+    private final RecordingTransactions transactions = new RecordingTransactions();
+
     // A real registry: the mismatch counter is read back in the tests.
     private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
@@ -55,7 +68,7 @@ public class UserProvisioningServiceTest {
     @BeforeEach
     void setUp() {
 
-        provisioningService = new UserProvisioningService(userRepository, outboxService, meterRegistry);
+        provisioningService = new UserProvisioningService(userRepository, outboxService, orphanEmailService, transactions, meterRegistry);
 
     }
 
@@ -398,8 +411,145 @@ public class UserProvisioningServiceTest {
         Jwt token = JwtFixtures.validUser(USER_ID).build();
 
         when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.insertIgnoringConflict(USER_ID, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
+                .thenReturn(1); // Inserted, yet not readable: only a bug can do that. (0 would mean "the address is taken".)
 
         assertThatThrownBy(() -> provisioningService.ensureUsable(token))
                 .isInstanceOf(IllegalStateException.class);
+
+        verifyNoInteractions(orphanEmailService);
+    }
+
+    // --- the address of a new registration belongs to another account (the insert returned 0 and there is no row with
+    // this id): ask whether that account is an orphan, after the transaction
+
+    private void newUserWhoseAddressIsTaken() {
+
+        // Nothing inserted and nothing to read back: uq_users_email refused the insert.
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.insertIgnoringConflict(USER_ID, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
+                .thenReturn(0);
+
+    }
+
+    @Test
+    void ensureUsable_addressHeldByAnOrphan_throwsEmailBeingReleasedAndWritesNothing() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        newUserWhoseAddressIsTaken();
+        when(orphanEmailService.releaseIfOrphaned(UserFixtures.ARTHUR_MORGAN_EMAIL)).thenReturn(OrphanEmailService.Outcome.ORPHAN_RELEASING);
+
+        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
+                .isInstanceOf(EmailBeingReleasedException.class);
+
+        verifyNoInteractions(outboxService);
+    }
+
+    // The holder vanished between the refused insert and the lookup (its address was scrubbed meanwhile): the same
+    // request will work in a moment, so the answer is the same "try again".
+    @Test
+    void ensureUsable_addressNoLongerHeld_throwsEmailBeingReleased() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        newUserWhoseAddressIsTaken();
+        when(orphanEmailService.releaseIfOrphaned(UserFixtures.ARTHUR_MORGAN_EMAIL)).thenReturn(OrphanEmailService.Outcome.NO_HOLDER);
+
+        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
+                .isInstanceOf(EmailBeingReleasedException.class);
+    }
+
+    @Test
+    void ensureUsable_addressHeldByALiveAccount_throwsEmailAlreadyInUse() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        newUserWhoseAddressIsTaken();
+        when(orphanEmailService.releaseIfOrphaned(UserFixtures.ARTHUR_MORGAN_EMAIL)).thenReturn(OrphanEmailService.Outcome.HELD_BY_LIVE_ACCOUNT);
+
+        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
+                .isInstanceOf(EmailAlreadyInUseException.class);
+
+        verifyNoInteractions(outboxService);
+    }
+
+    // Keycloak down, slow or the circuit open: nothing can be decided, and the exception reaches the handler (503).
+    @Test
+    void ensureUsable_keycloakCannotBeAsked_propagatesTheFailure() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        newUserWhoseAddressIsTaken();
+        KeycloakUnavailableException failure = new KeycloakUnavailableException("down", true);
+        when(orphanEmailService.releaseIfOrphaned(UserFixtures.ARTHUR_MORGAN_EMAIL)).thenThrow(failure);
+
+        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
+                .isSameAs(failure);
+    }
+
+    // The point of splitting the transaction from the method: the lookup in Keycloak must not run inside it.
+    @Test
+    void ensureUsable_addressTaken_asksAboutTheHolderOnlyAfterTheTransactionEnded() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        newUserWhoseAddressIsTaken();
+        when(orphanEmailService.releaseIfOrphaned(UserFixtures.ARTHUR_MORGAN_EMAIL)).thenAnswer(invocation -> {
+
+            assertThat(transactions.open).as("a transaction is open during the call to Keycloak").isFalse();
+
+            return OrphanEmailService.Outcome.NO_HOLDER;
+
+        });
+
+        assertThatThrownBy(() -> provisioningService.ensureUsable(token))
+                .isInstanceOf(EmailBeingReleasedException.class);
+
+        assertThat(transactions.completedExceptionally)
+                .as("the transaction that found the address taken was rolled back, not committed")
+                .isTrue();
+    }
+
+    // The ordinary paths never ask about orphans.
+    @Test
+    void ensureUsable_existingActiveUser_neverAsksAboutOrphans() {
+
+        Jwt token = JwtFixtures.validUser(USER_ID).build();
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).build()));
+
+        provisioningService.ensureUsable(token);
+
+        verifyNoInteractions(orphanEmailService);
+    }
+
+    // A TransactionOperations that only keeps track of what happened: whether its callback is running, and whether it
+    // ended by throwing (which a real transaction would roll back on).
+    private static final class RecordingTransactions implements TransactionOperations {
+
+        boolean open;
+
+        boolean completedExceptionally;
+
+        @Override
+        public <T> T execute(TransactionCallback<T> action) {
+
+            TransactionStatus status = new SimpleTransactionStatus();
+            open = true;
+            completedExceptionally = false;
+
+            try {
+
+                return action.doInTransaction(status);
+
+            }
+            catch (RuntimeException e) {
+
+                completedExceptionally = true;
+                throw e;
+
+            }
+            finally {
+
+                open = false;
+
+            }
+
+        }
     }
 }

@@ -33,6 +33,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "app.outbox.relay.interval-ms=86400000",
         "app.user.deletion.promoter.interval-ms=86400000",
+        "app.user.deletion.keycloak.interval-ms=86400000",
+        "app.keycloak.admin.client-secret=test-secret",
         "app.outbox.purge.cron=-"
 })
 @AutoConfigureMockMvc

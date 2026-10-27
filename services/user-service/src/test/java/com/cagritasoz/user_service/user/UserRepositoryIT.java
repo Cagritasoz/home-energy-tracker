@@ -356,7 +356,7 @@ class UserRepositoryIT {
 
     }
 
-    // --- insertIgnoringConflict (ON CONFLICT (id) DO NOTHING) - the just-in-time provisioning insert
+    // --- insertIgnoringConflict (ON CONFLICT DO NOTHING) - the just-in-time provisioning insert
 
     @Test
     void insertIgnoringConflict_newId_insertsRowWithDefaults() {
@@ -403,8 +403,11 @@ class UserRepositoryIT {
 
     }
 
+    // The address belongs to another live account. ON CONFLICT DO NOTHING (no target) swallows this unique violation as
+    // well, so the caller gets 0 and no row for the new id, and can tell this apart from "the id already existed" (0 and
+    // the row is there). An exception here would abort the caller's transaction, and the caller needs it to go on.
     @Test
-    void insertIgnoringConflict_newIdWithEmailOfLiveUser_throwsDataIntegrityViolation() {
+    void insertIgnoringConflict_newIdWithEmailOfLiveUser_returnsZeroAndCreatesNothing() {
 
         UUID existingId = UUID.randomUUID();
 
@@ -418,11 +421,25 @@ class UserRepositoryIT {
 
         UUID newId = UUID.randomUUID();
 
-        assertThatThrownBy(() -> userRepository.insertIgnoringConflict(newId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME))
-                .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("uq_users_email")
-                .rootCause().isInstanceOfSatisfying(SQLException.class,
-                        cause -> assertThat(cause.getSQLState()).isEqualTo("23505"));
+        int inserted = userRepository.insertIgnoringConflict(newId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME);
+
+        assertThat(inserted).isZero();
+        assertThat(userRepository.findById(newId)).isEmpty();
+        assertThat(userRepository.findById(existingId)).isPresent();
+
+    }
+
+    // Case does not matter: uq_users_email is on lower(email), and Keycloak lower-cases every address anyway.
+    @Test
+    void insertIgnoringConflict_emailOfLiveUserInOtherCase_returnsZero() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, "Arthur.Morgan@Example.com", UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        int inserted = userRepository.insertIgnoringConflict(UUID.randomUUID(), "arthur.morgan@example.com", UserFixtures.ARTHUR_MORGAN_NAME);
+
+        assertThat(inserted).isZero();
 
     }
 
@@ -892,6 +909,248 @@ class UserRepositoryIT {
         int reregistered = userRepository.insertIgnoringConflict(UUID.randomUUID(), emailOf(first), UserFixtures.LEON_KENNEDY_NAME);
 
         assertThat(reregistered).isOne();
+
+    }
+
+    // --- findIdsPendingKeycloakDeletion: the Keycloak hard-delete job's work list
+
+    @Test
+    void findIdsPendingKeycloakDeletion_returnsOnlyDeletingAccountsWithoutAKeycloakStamp() {
+
+        UUID pending = UUID.randomUUID();
+        UUID alreadyStamped = UUID.randomUUID();
+        UUID scheduled = UUID.randomUUID();
+        UUID active = UUID.randomUUID();
+        UUID deleted = UUID.randomUUID();
+
+        insertUser(pending, emailOf(pending), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        insertUser(alreadyStamped, emailOf(alreadyStamped), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        jdbc.update("UPDATE users SET keycloak_deleted_at = ?::timestamptz WHERE id = ?", YEAR_2000, alreadyStamped);
+        insertScheduledUser(scheduled, YEAR_2000);
+        insertUser(active, emailOf(active), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+        insertUser(deleted, emailOf(deleted), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
+
+        assertThat(userRepository.findIdsPendingKeycloakDeletion(10)).containsExactly(pending);
+
+    }
+
+    // Longest waiting first (deletion_started_at), ties by id, and the limit cuts the list after that order.
+    @Test
+    void findIdsPendingKeycloakDeletion_ordersByStartThenIdAndHonoursTheLimit() {
+
+        insertUser(TIED_HIGH_ID, emailOf(TIED_HIGH_ID), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        insertUser(TIED_LOW_ID, emailOf(TIED_LOW_ID), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        insertUser(NEWEST_ID, emailOf(NEWEST_ID), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+        jdbc.update("UPDATE users SET deletion_started_at = ?::timestamptz WHERE id IN (?, ?)", "2000-01-02T00:00:00Z", TIED_HIGH_ID, TIED_LOW_ID);
+        jdbc.update("UPDATE users SET deletion_started_at = ?::timestamptz WHERE id = ?", "2000-01-01T12:00:00Z", NEWEST_ID); // The earliest start, though the highest id.
+
+        assertThat(userRepository.findIdsPendingKeycloakDeletion(10)).containsExactly(NEWEST_ID, TIED_LOW_ID, TIED_HIGH_ID);
+        assertThat(userRepository.findIdsPendingKeycloakDeletion(2)).containsExactly(NEWEST_ID, TIED_LOW_ID);
+
+    }
+
+    @Test
+    void findIdsPendingKeycloakDeletion_nothingPending_returnsAnEmptyList() {
+
+        assertThat(userRepository.findIdsPendingKeycloakDeletion(10)).isEmpty();
+
+    }
+
+    // --- markKeycloakDeleted: stamps keycloak_deleted_at once the Keycloak user is gone
+
+    @Test
+    void markKeycloakDeleted_deletingAccount_returnsOneAndStampsItWithoutTouchingAnythingElse() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, emailOf(existingId), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+
+        int marked = userRepository.markKeycloakDeleted(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(marked).isOne();
+        assertThat(user.getKeycloakDeletedAt()).isAfter(Instant.parse(YEAR_2000)); // Stamped by the database.
+        assertThat(user.getVersion()).isOne();
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETING);
+        assertThat(user.getEmail()).isEqualTo(emailOf(existingId));
+        assertThat(user.getDeletionStartedAt()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getDeletedAt()).isNull();
+
+    }
+
+    // Two instances that both deleted the same Keycloak user both try to stamp it: one stamp, one row changed, and the
+    // first timestamp stands.
+    @Test
+    void markKeycloakDeleted_calledTwice_stampsOnce() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, emailOf(existingId), UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETING);
+
+        int first = userRepository.markKeycloakDeleted(existingId);
+        Instant stamp = userRepository.findById(existingId).orElseThrow().getKeycloakDeletedAt();
+        int second = userRepository.markKeycloakDeleted(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(first).isOne();
+        assertThat(second).isZero();
+        assertThat(user.getKeycloakDeletedAt()).isEqualTo(stamp);
+        assertThat(user.getVersion()).isOne();
+
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = UserStatus.class, names = {"ACTIVE", "DELETION_SCHEDULED", "DELETED"})
+    void markKeycloakDeleted_accountNotDeleting_returnsZeroAndChangesNothing(UserStatus status) {
+
+        UUID existingId = UUID.randomUUID();
+
+        if (status == UserStatus.DELETION_SCHEDULED) {
+
+            insertScheduledUser(existingId, YEAR_2000);
+
+        }
+        else {
+
+            insertUser(existingId, emailOf(existingId), UserFixtures.ARTHUR_MORGAN_NAME, status);
+
+        }
+
+        int marked = userRepository.markKeycloakDeleted(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(marked).isZero();
+        assertThat(user.getKeycloakDeletedAt()).isNull();
+        assertThat(user.getVersion()).isZero();
+
+    }
+
+    @Test
+    void markKeycloakDeleted_unknownId_returnsZero() {
+
+        assertThat(userRepository.markKeycloakDeleted(UUID.randomUUID())).isZero();
+
+    }
+
+    // --- findLiveByEmail: who holds an address
+
+    @Test
+    void findLiveByEmail_activeAccount_isFoundInAnyCase() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, "Arthur.Morgan@Example.com", UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.ACTIVE);
+
+        assertThat(userRepository.findLiveByEmail("arthur.morgan@example.com")).map(User::getId).contains(existingId);
+        assertThat(userRepository.findLiveByEmail("ARTHUR.MORGAN@EXAMPLE.COM")).map(User::getId).contains(existingId);
+
+    }
+
+    // A scheduled account still holds its address (uq_users_email counts it), so it is the holder too.
+    @Test
+    void findLiveByEmail_scheduledAccount_isFound() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, FAR_FUTURE);
+
+        assertThat(userRepository.findLiveByEmail(emailOf(existingId))).map(User::getId).contains(existingId);
+
+    }
+
+    @Test
+    void findLiveByEmail_deletedAccount_holdsNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, UserFixtures.ARTHUR_MORGAN_EMAIL, UserFixtures.ARTHUR_MORGAN_NAME, UserStatus.DELETED);
+
+        assertThat(userRepository.findLiveByEmail(UserFixtures.ARTHUR_MORGAN_EMAIL)).isEmpty();
+
+    }
+
+    // The promoter scrubs the address in the same statement as the status, so a DELETING account holds nothing.
+    @Test
+    void findLiveByEmail_afterPromotion_holdsNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, YEAR_2000);
+        userRepository.promoteDeletion(existingId);
+
+        assertThat(userRepository.findLiveByEmail(emailOf(existingId))).isEmpty();
+
+    }
+
+    @Test
+    void findLiveByEmail_unknownAddress_returnsEmpty() {
+
+        assertThat(userRepository.findLiveByEmail("nobody@example.com")).isEmpty();
+
+    }
+
+    // --- bringDeletionForward: an already scheduled deletion is due now
+
+    @Test
+    void bringDeletionForward_scheduledFarAhead_returnsOneAndMakesTheAccountDue() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, FAR_FUTURE);
+
+        int moved = userRepository.bringDeletionForward(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(moved).isOne();
+        assertThat(user.getDeletionScheduledFor()).isBefore(Instant.parse(FAR_FUTURE));
+        assertThat(user.getDeletionScheduledFor()).isAfter(Instant.parse(YEAR_2000));
+        assertThat(user.getStatus()).isEqualTo(UserStatus.DELETION_SCHEDULED);
+        assertThat(user.getVersion()).isOne();
+        assertThat(userRepository.findIdsDueForPromotion(10)).containsExactly(existingId);
+        assertThat(userRepository.promoteDeletion(existingId)).isOne();
+
+    }
+
+    @Test
+    void bringDeletionForward_alreadyDue_returnsZeroAndChangesNothing() {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertScheduledUser(existingId, YEAR_2000);
+
+        int moved = userRepository.bringDeletionForward(existingId);
+
+        User user = userRepository.findById(existingId).orElseThrow();
+
+        assertThat(moved).isZero();
+        assertThat(user.getDeletionScheduledFor()).isEqualTo(Instant.parse(YEAR_2000));
+        assertThat(user.getVersion()).isZero();
+
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = UserStatus.class, names = {"ACTIVE", "DELETING", "DELETED"})
+    void bringDeletionForward_accountNotScheduled_returnsZeroAndChangesNothing(UserStatus status) {
+
+        UUID existingId = UUID.randomUUID();
+
+        insertUser(existingId, emailOf(existingId), UserFixtures.ARTHUR_MORGAN_NAME, status);
+
+        int moved = userRepository.bringDeletionForward(existingId);
+
+        assertThat(moved).isZero();
+        assertThat(userRepository.findById(existingId).orElseThrow().getVersion()).isZero();
+
+    }
+
+    @Test
+    void bringDeletionForward_unknownId_returnsZero() {
+
+        assertThat(userRepository.bringDeletionForward(UUID.randomUUID())).isZero();
 
     }
 

@@ -1,5 +1,7 @@
 package com.cagritasoz.user_service.provisioning;
 
+import com.cagritasoz.user_service.keycloak.KeycloakCircuitOpenException;
+import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
 import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.security.SecuritySliceTest;
 import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
@@ -29,6 +31,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class ProvisioningInterceptorWiringTest extends SecuritySliceTest {
@@ -46,6 +49,10 @@ class ProvisioningInterceptorWiringTest extends SecuritySliceTest {
                 Arguments.of(route, new AccountDeletedException(), 410, "account-deleted"),
                 Arguments.of(route, new EmailNotVerifiedException(), 403, "email-not-verified"),
                 Arguments.of(route, new MissingIdentityClaimException("email"), 403, "missing-identity-claim"),
+                Arguments.of(route, new EmailBeingReleasedException(), 503, "email-being-released"),
+                Arguments.of(route, new EmailAlreadyInUseException(), 409, "email-already-in-use"),
+                Arguments.of(route, new KeycloakUnavailableException("down", true), 503, "identity-provider-unavailable"),
+                Arguments.of(route, new KeycloakCircuitOpenException(null), 503, "identity-provider-unavailable"),
                 Arguments.of(route, new DataIntegrityViolationException("x",
                         new SQLException("duplicate key value violates unique constraint", "23505")), 409, "data-conflict"),
                 Arguments.of(route, new RuntimeException("db password: hunter2"), 500, "internal-error")));
@@ -86,6 +93,20 @@ class ProvisioningInterceptorWiringTest extends SecuritySliceTest {
         assertThat(result.getResponse().getContentAsString()).contains("home-energy-tracker/problems/" + expectedType);
         assertThat(result.getResponse().getContentAsString()).doesNotContain("hunter2");
         verifyNoInteractions(userProfileService, deletionSchedulingService);
+    }
+
+    // The two answers that tell the client to come back carry Retry-After; the conflict that waiting cannot fix does not.
+    @ParameterizedTest
+    @MethodSource("customerRoutes")
+    void provisioningFailure_thatIsWorthRetrying_carriesRetryAfter(Route route) throws Exception {
+        doThrow(new EmailBeingReleasedException()).when(provisioningService).ensureUsable(any());
+        call(route, TestTokens.user(USER_ID).bearer()).andExpect(status().isServiceUnavailable()).andExpect(header().string("Retry-After", "10"));
+
+        doThrow(new KeycloakUnavailableException("down", true)).when(provisioningService).ensureUsable(any());
+        call(route, TestTokens.user(USER_ID).bearer()).andExpect(status().isServiceUnavailable()).andExpect(header().string("Retry-After", "30"));
+
+        doThrow(new EmailAlreadyInUseException()).when(provisioningService).ensureUsable(any());
+        call(route, TestTokens.user(USER_ID).bearer()).andExpect(status().isConflict()).andExpect(header().doesNotExist("Retry-After"));
     }
 
     @Test

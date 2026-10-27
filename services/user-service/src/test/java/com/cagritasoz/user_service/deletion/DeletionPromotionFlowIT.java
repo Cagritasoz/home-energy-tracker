@@ -13,6 +13,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -36,10 +37,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.outbox.purge.cron=-",
         "app.user.deletion.grace=2s",
         "app.user.deletion.promoter.interval-ms=200",
+        "app.user.deletion.keycloak.interval-ms=86400000",
+        "app.keycloak.admin.client-secret=test-secret",
         "app.user.deletion.required-participants=devices,usage"
 })
 @AutoConfigureMockMvc
 @Import(PostgresTestContainerConfig.class)
+// Closed after the class: a cached context would keep its promoter ticking every 200 ms against the shared database
+// while the next test classes seed overdue accounts of their own.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class DeletionPromotionFlowIT {
 
     private static final UUID USER_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");

@@ -2,6 +2,9 @@ package com.cagritasoz.user_service.web;
 
 import com.cagritasoz.user_service.deletion.DeletionDeadlinePassedException;
 import com.cagritasoz.user_service.deletion.DeletionScheduledException;
+import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
+import com.cagritasoz.user_service.provisioning.EmailAlreadyInUseException;
+import com.cagritasoz.user_service.provisioning.EmailBeingReleasedException;
 import com.cagritasoz.user_service.provisioning.EmailNotVerifiedException;
 import com.cagritasoz.user_service.provisioning.MissingIdentityClaimException;
 import com.cagritasoz.user_service.user.AccountDeletedException;
@@ -11,8 +14,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 
@@ -133,6 +138,47 @@ class GlobalExceptionHandlerTest {
         assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/email-not-verified");
         assertThat(problemDetail.getTitle()).isEqualTo("Email not verified");
         assertThat(problemDetail.getDetail()).isEqualTo("Email is not verified.");
+    }
+
+    // The address belongs to an account that is being removed: the same request works shortly, so 503 with Retry-After.
+    @Test
+    void handleEmailBeingReleasedException_returns503WithRetryAfter() {
+        ResponseEntity<ProblemDetail> response = handler.handleEmailBeingReleasedException(new EmailBeingReleasedException());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("10");
+        ProblemDetail problemDetail = response.getBody();
+        assertThat(problemDetail).isNotNull();
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/email-being-released");
+        assertThat(problemDetail.getTitle()).isEqualTo("Email being released");
+        assertThat(problemDetail.getProperties()).containsKey("timestamp");
+    }
+
+    // A live account holds the address: waiting does not help, so no Retry-After and a 409.
+    @Test
+    void handleEmailAlreadyInUseException_returns409() {
+        ProblemDetail problemDetail = handler.handleEmailAlreadyInUseException(new EmailAlreadyInUseException());
+
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.CONFLICT.value());
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/email-already-in-use");
+        assertThat(problemDetail.getTitle()).isEqualTo("Email already in use");
+        assertThat(problemDetail.getDetail()).isEqualTo("The email address is already in use by another account.");
+    }
+
+    // The exception's own text stays in the log; the client gets a fixed sentence.
+    @Test
+    void handleKeycloakUnavailableException_returns503WithRetryAfterAndAFixedMessage() {
+        ResponseEntity<ProblemDetail> response = handler.handleKeycloakUnavailableException(
+                new KeycloakUnavailableException("Keycloak answered 502 to a user lookup", true));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("30");
+        ProblemDetail problemDetail = response.getBody();
+        assertThat(problemDetail).isNotNull();
+        assertThat(problemDetail.getType()).hasToString("https://home-energy-tracker/problems/identity-provider-unavailable");
+        assertThat(problemDetail.getDetail()).isEqualTo("The identity provider is not available. Please try again shortly.")
+                .doesNotContain("502");
     }
 
     @Test
