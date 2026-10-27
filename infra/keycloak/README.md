@@ -491,6 +491,17 @@ Granting `manage-users` alone is enough for reads (verified: with `view-users` r
 
 `manage-users` is powerful: the holder can change or delete any user, including their credentials. That is why the secret is an environment variable, the client has no other flow, and the application admin role carries none of this.
 
+### What user-service does with it
+
+Since step 5f of the deletion saga user-service calls exactly two endpoints with this account, both for one user by id, both idempotent (`KeycloakAdminRestClient`; settings `app.keycloak.admin.*`, the secret from `USER_SERVICE_ADMIN_CLIENT_SECRET`):
+
+| Call | Used for | Answers it relies on |
+|---|---|---|
+| `DELETE /admin/realms/energy-tracker/users/{id}` | The hard-delete job removes the Keycloak user of an account that is `DELETING` | 204 deleted; 404 not there (counted as success) |
+| `GET /admin/realms/energy-tracker/users/{id}` | A new registration's address belongs to another account: is that account's user still in Keycloak? | 200 exists; 404 does not |
+
+Verified against this realm file by `KeycloakAdminClientIT`: both answers as listed, a deleted user cannot log in afterwards (the direct grant answers 400 `invalid_grant`) and the address can be registered again at once, and a wrong secret is answered 401 by the token endpoint. Each delete is stored as an admin event naming the service account, which is the audit trail of what user-service removed; lookups are not stored.
+
 ## 9. Settings outside the realm file
 
 | Where | Setting | Why |

@@ -214,7 +214,29 @@ Cancel and promote exclude each other through the row lock and the status check:
 
 ### 8.4 Keycloak hard delete
 
-After the promotion commit, a job picks `DELETING` rows with `keycloak_deleted_at IS NULL` (`SKIP LOCKED`, small batch), calls the admin API to delete the user and, on success, stamps `keycloak_deleted_at`. A 404 counts as success (someone already deleted it). Failures leave the row for the next tick; a circuit breaker stops the job hammering a dead Keycloak. The transaction stays open during the HTTP call; a small batch and short timeouts bound that, and two instances deleting the same user is harmless because the call is idempotent.
+After the promotion commit, a job works through the `DELETING` accounts with `keycloak_deleted_at IS NULL`, oldest first, a small batch per tick:
+
+```sql
+-- the work list: a plain read, locks nothing
+SELECT id FROM users
+ WHERE status = 'DELETING' AND keycloak_deleted_at IS NULL
+ ORDER BY deletion_started_at, id
+ LIMIT :batch;
+
+-- for each id: call Keycloak (DELETE /admin/realms/{realm}/users/{id}; no database involved), then one statement
+UPDATE users SET keycloak_deleted_at = CURRENT_TIMESTAMP, version = version + 1
+ WHERE id = :id AND status = 'DELETING' AND keycloak_deleted_at IS NULL;
+```
+
+**No database transaction is open during the Keycloak call.** The first version of this design took the rows with `FOR UPDATE SKIP LOCKED` and held the transaction (a connection and the row locks) across each HTTP call, bounded by a small batch and short timeouts. That ties the database to Keycloak's speed for no gain, because nothing here needs the lock:
+
+- The delete is idempotent: a 404 (already gone) counts as success, so repeating it is always safe.
+- A crash between the call and the `UPDATE` leaves the user deleted in Keycloak and the row unstamped; the next tick calls again, gets 404, and stamps.
+- Two instances walking the same list both call Keycloak for the same account (harmless) and both run the `UPDATE`; the compare-and-set lets one stamp and tells the other it matched nothing. The cost is that duplicated work, bounded by the batch size.
+- Failures (a timeout, a 5xx, an open circuit) leave the row as it is. A tick ends at the first call the open circuit breaker refuses, because the rest would be refused too; any other failure is counted and logged and the loop moves on to the next account.
+
+The stamp is only ever written after Keycloak has confirmed (204 or 404), never before: the finaliser trusts it to mean "this account can no longer log in".
+
 
 Keycloak is hard-deleted at promotion rather than disabled: from that moment the user cannot log in or refresh, and the email is free in Keycloak. Access tokens issued earlier stay valid until they expire (5 minutes), which is why the finaliser waits (8.6) and why user-service answers 410 from its own database regardless of the token.
 
@@ -248,11 +270,29 @@ A required participant that never confirms stalls finalisation for that user, an
 
 ### 8.7 Observability
 
-The promoter has two counters already: `user.deletion.promoted` (accounts this instance moved to `DELETING`) and `user.deletion.promotion.failures` (promotions that threw; a rate above zero means an account is stuck). Gauges, in the style of the existing outbox metrics: number of scheduled deletions, age of the oldest `DELETING` row, age of the oldest row still waiting for its Keycloak delete, pending confirmations per participant, circuit-breaker state of the Keycloak client; a counter for token-vs-row email mismatches (section 10). Dead-letter topics of every consumer need their own alert, because a poison `UserDeletionStarted` in a participant's dead-letter topic is the one failure that would otherwise be silent until the stall alert fires.
+The promoter has two counters already: `user.deletion.promoted` (accounts this instance moved to `DELETING`) and `user.deletion.promotion.failures` (promotions that threw; a rate above zero means an account is stuck). The Keycloak job has `user.deletion.keycloak.deleted` and `user.deletion.keycloak.failures` (a failure rate above zero means Keycloak, or the rights of the service account, are in trouble) and the admin client has the gauge `keycloak.admin.circuit.state` (0 closed, 1 half open, 2 open; alert on 2 for more than a minute). The orphan-address handling (8.8) counts `user.email.orphan.released` and `user.email.collision.live` (the second should stay at zero: it means Keycloak and our rows disagree about an address). Gauges, in the style of the existing outbox metrics: number of scheduled deletions, age of the oldest `DELETING` row, age of the oldest row still waiting for its Keycloak delete, pending confirmations per participant, circuit-breaker state of the Keycloak client; a counter for token-vs-row email mismatches (section 10). Dead-letter topics of every consumer need their own alert, because a poison `UserDeletionStarted` in a participant's dead-letter topic is the one failure that would otherwise be silent until the stall alert fires.
+
+### 8.8 Orphan email collision
+
+A row that outlived its Keycloak user (an operator deleted the user in Keycloak's console; nothing told us) still holds its address in `uq_users_email`. When the same person registers again Keycloak accepts it, because the address is free there, and issues a new `sub`; but the new account cannot be provisioned, because its address belongs to the old row.
+
+What happens, in `ensureUsable` (the provisioning step of every customer request):
+
+1. **The insert is refused by the address, and says so without failing.** The provisioning insert is `INSERT ... ON CONFLICT DO NOTHING` (no conflict target, so it covers the primary key and the address index alike). It returns 0 in both cases and the caller reads the row back: a row with the new id exists = a concurrent request created it (carry on, as before); no row = the address belongs to another account. An exception would also tell them apart, but it would abort the transaction, and the next step needs to go on from here.
+2. **The transaction is rolled back and the Keycloak part happens after it.** `ensureUsable` is not `@Transactional` itself: its database work runs in a transaction opened with a `TransactionOperations`, so the question to Keycloak (below) is asked with no transaction open, like the hard-delete job.
+3. **Who holds the address?** `findLiveByEmail`: the one non-`DELETED` row whose lower-cased address matches (a `DELETING` row has been scrubbed and holds nothing). None any more (it was released meanwhile) = answer 503 `email-being-released`, the retry will work.
+4. **Does that account still exist in Keycloak?** `userExists(holder id)`.
+   - **No**: the holder is an orphan. It goes through the ordinary saga with a grace period of zero (`scheduleForImmediateDeletion`): an `ACTIVE` account is scheduled with the deadline set to now and announced with `UserDeletionScheduled` like any other schedule; an account that is already scheduled further out gets its deadline moved to now (no new event: the schedule was announced, and consumers act on `UserDeletionStarted`, not on the date). The promoter scrubs the address on its next tick, after which the retry is provisioned. The new request is answered **503 `email-being-released`** with `Retry-After: 10`.
+   - **Yes**: Keycloak and our row disagree about whose address this is (it was probably changed in Keycloak's console). Nothing is changed and the answer is **409 `email-already-in-use`**, with an ERROR in the log naming the holder's id and the counter `user.email.collision.live`; only an operator can resolve it.
+   - **Keycloak cannot answer** (down, slow, circuit open): **503 `identity-provider-unavailable`** with `Retry-After: 30`, and nothing is changed. A dead Keycloak must never make every colliding account look like an orphan.
+
+The address is never handed to the new `sub` directly. That would mean deciding in the middle of a request that one person's data may be replaced by another's; the old account instead goes through the normal deletion path, with its events and its participants' cleanup.
+
+The orphan's own Keycloak delete (the hard-delete job, 8.4) then finds nothing to delete and gets 404, which counts as success.
 
 ## 9. Keycloak
 
-- **Client for user-service:** a confidential service-account client holding only `manage-users` and `view-users` from `realm-management`; its secret comes from an environment variable. The admin REST API is called with a short connect timeout (about 1 s) and read timeout (about 3 s); the access token is cached until shortly before it expires. Resilience4j is used programmatically: a circuit breaker, and retry only on idempotent calls; no time limiter for blocking calls.
+- **Client for user-service** (built in step 5f, package `keycloak`): a confidential service-account client holding only `manage-users` and `view-users` from `realm-management`; its secret comes from the environment variable `USER_SERVICE_ADMIN_CLIENT_SECRET` (the application does not start without it). The interface `KeycloakAdmin` has two idempotent operations, `deleteUser(id)` (204 and 404 both mean success) and `userExists(id)`; everything else that can happen is one `KeycloakUnavailableException` (a subclass when the circuit refused the call), so callers never need to tell causes apart. The implementation uses `RestClient` over the JDK HTTP client (HTTP/1.1) with a 1 s connect and a 3 s read timeout. The access token comes from the client-credentials grant and is cached until 30 s before it expires; a 401 from the admin API drops it and counts as retryable. Resilience4j is used programmatically (no starter, no annotations): one retry after 200 ms, only for failures that can be transient (timeout, connection error, 5xx, 408, 429, a rejected token), and a circuit breaker (10 calls, at least 5, 50 % failures opens it for 30 s, then 2 probe calls) that counts every attempt including retries and every failure including the ones that are not retried (a client that is refused on every call is as useless as a dead one). No time limiter: the calls are blocking and the timeouts already bound them. Nothing Keycloak sends back is ever put in an exception message or a log (an error body can quote an email address): messages carry an HTTP status or a description only. All settings are `app.keycloak.admin.*`.
 - **Application admins are not Keycloak admins.** The application's `admin` role is an ordinary realm role; it holds no `realm-management` role and gets 403 on Keycloak's admin REST API (verified). Keycloak's console is for infra operators. They cannot be stopped technically, so the rule is "do not edit users there; use the admin endpoints", backed by Keycloak's admin events, which record who changed what (verified). Operator actions that do not touch our data (unlocking, disabling, resetting MFA) are fine.
 - **Realm settings that matter here** (all in the realm file and the compose file, documented in `infra/keycloak/README.md`, checked by an integration test against the real realm): the email edit lock (section 10.2), `verifyEmail: true`, `resetPasswordAllowed: true` and an SMTP server for registrations and resets (Mailpit in development), the `email` event listener for password-changed notices, limited to password changes by a server option because the realm's own event list does not limit it, admin events on.
 - **Login and registration stay entirely with Keycloak** and are never gated by the account's deletion state: a user in `DELETION_SCHEDULED` must be able to log in to cancel. Registering with an address held by a pending account fails with Keycloak's "already exists".
@@ -360,12 +400,14 @@ The price of the last option comes from one requirement, that the email cannot c
 | `PATCH` racing a schedule | The write rechecks the status in its own transaction (and `@Version` catches concurrent edits): it either completes before the schedule or answers 409. |
 | Schedule, cancel, schedule again in quick succession | Events are keyed by user, so ordered; consumers compare `aggregateVersion` with `>`; `UserDeletionStarted` wins over any older event. |
 | Two promoters | Each account is claimed by a compare-and-set `UPDATE`: the second blocks on the row lock, then matches nothing. One promotion, one event, one set of participant rows (tested with staged transactions and with two whole jobs on one backlog). |
-| Two finalisers or Keycloak jobs | `FOR UPDATE SKIP LOCKED` hands disjoint rows to each; the Keycloak delete is idempotent anyway. |
+| Two Keycloak jobs | Both may delete the same user in Keycloak (idempotent: the second gets 404, which counts as success); the guarded `UPDATE` that stamps `keycloak_deleted_at` changes the row once. No lock is held, so neither waits for the other (tested with two threads inside the Keycloak call at the same moment). |
+| Two finalisers | `FOR UPDATE SKIP LOCKED` hands disjoint rows to each. |
 | Duplicate or redelivered ack | `WHERE acked_at IS NULL` plus `processed_events`: a no-op. |
 | First requests of a new user in parallel | `INSERT ... ON CONFLICT DO NOTHING`: one `UserRegistered`. |
 | A token still valid after promotion | user-service answers 410 from its own database. Other services rely on their tombstone, and the final sweep and quiet period cover requests in flight. |
 | Configuration changed while deletions are in flight | Deadlines are absolute; the participant set is snapshotted at promotion. |
 | Re-registering with an address that belonged to a deleted account | Possible once the Keycloak user is deleted and the row scrubbed. Before that Keycloak answers "already exists". |
+| Two first requests of a new user while an orphan holds their address | Both are told to retry (503); the orphan is scheduled once (the second finds it scheduled and due, and writes nothing), so one `UserDeletionScheduled`. |
 | Email change in flight when a deletion is scheduled | Pending requests are cancelled by the schedule; an applying one finishes (harmless). |
 
 ## 12. Failure modes
@@ -378,7 +420,7 @@ The price of the last option comes from one requirement, that the email cannot c
 | A poison event in a consumer | The record goes to the dead-letter topic; the participant never confirms. | Dead-letter alert; fix and replay (the cleanup is idempotent). |
 | Database error inside a job | The transaction rolls back; the row is untouched. | Next tick. |
 | An instance dies mid-job | Same: a transaction either commits or does not. | Another instance, or the next tick. |
-| An operator deleted a Keycloak user by hand | The row stays `ACTIVE` with nobody able to log in; a new registration with that address cannot be provisioned (`uq_users_email`). | On that unique violation, ask Keycloak whether the old `sub` exists; if not, set the old row's deadline to now (the promoter scrubs it) and answer the new user 503 with `Retry-After`. The address is never handed to the new `sub` directly. |
+| An operator deleted a Keycloak user by hand | The row stays `ACTIVE` with nobody able to log in; a new registration with that address cannot be provisioned (`uq_users_email`). | Built in step 5f, see 8.8: when the new account's insert is refused because of the address, ask Keycloak whether the old `sub` exists; if not, schedule the old account with the deadline set to now (the promoter scrubs it) and answer the new user 503 with `Retry-After`. The address is never handed to the new `sub` directly. An orphan that nobody ever collides with is not found by any of this: see section 13. |
 
 ## 13. Gaps and accepted trade-offs
 
@@ -388,8 +430,15 @@ The price of the last option comes from one requirement, that the email cannot c
 - **Backups** keep deleted data until they expire; this design does not address it.
 - **Participant cost varies.** Deleting a user's time series can take far longer than deleting a few rows; participants confirm only when finished, and the stall alert's threshold should reflect that.
 - **Freeze lag.** Other services freeze from events, so a write can slip through in the moment between the schedule commit and the event arriving. Accepted: `UserDeletionStarted` is the hard stop and the final sweep cleans up.
-- **Hard-delete transaction.** The Keycloak job holds a database connection during each HTTP call (bounded by batch size and timeouts).
+- **Duplicate Keycloak calls.** With no lock held during the call, two instances can both delete the same Keycloak user; the call is idempotent and the extra work is bounded by the batch size.
+- **One bad account can starve the Keycloak job.** The list is oldest first and a batch is small, so a few accounts that Keycloak keeps refusing (a 403, say) fill every batch and the accounts behind them wait. The failure counter is what raises the alarm; the promoter has the same property.
 - **Console edits cannot be prevented**, only audited and detected (section 9, 10).
+- **Orphaned accounts that nobody collides with (open, not built).** Section 8.8 releases an orphan only when someone registers with its address. An account whose Keycloak user was removed out of band and whose address nobody registers again stays `ACTIVE` indefinitely: nobody can log in to it, no `UserDeletionStarted` is ever emitted, so every participant service keeps that user's data, and personal data is retained although the identity is gone. Out-of-band causes are not only an operator deleting a user in Keycloak's console: a Keycloak database restored from a backup older than the users registered since, a realm reset or re-import, and a federation sync that drops users all do the same, and some of them orphan many accounts at once. The rule "delete users through user-service's admin endpoints, never in Keycloak's console" prevents the first cause only, and Keycloak's admin events only audit it. Options, none built:
+  - **(a) A reconcile job in user-service.** Walk the `ACTIVE` rows in small batches, ask Keycloak (`userExists`, which exists already) and schedule the missing ones with `scheduleForImmediateDeletion`. Simple, a safety net for every cause, and it uses code that is there; the costs are one HTTP call per row per round and a detection delay of up to one round. It needs a guard: a Keycloak that answers "not found" for everyone (an empty realm after a botched restore or import) must not make it schedule every account, so a round that finds more than a small fraction missing acts on none and raises an alert instead.
+  - **(b) Poll Keycloak's admin events** for `DELETE` on resource type `USER` since a stored cursor. It needs the `view-events` role, which the service account does not have (not tested), and events outside Keycloak's retention are lost, so it cannot replace (a) and misses everything a restore or a reset did.
+  - **(c) A Keycloak event-listener provider** that publishes user deletions to Kafka. Push instead of polling, but it is code that runs inside Keycloak and has to be built into its image and maintained with each Keycloak upgrade.
+
+  Recommendation: (a) with the guard, built after the saga is closed, plus the runbook rule; (b) or (c) only if the detection delay turns out to matter.
 - **The interceptor and the controller each read the user row** on every request; to be measured under load before optimising.
 - **Admin-initiated flows are not specified in detail.** An admin deletion is the same state machine with the deadline set to now; whether an admin may edit a scheduled account is undecided.
 - **Grace length versus privacy-law deadlines** is a product and legal question; shorter is safer.
@@ -405,10 +454,10 @@ The price of the last option comes from one requirement, that the email cannot c
 | `app.user.deletion.grace` | Time between request and irreversibility | 5 minutes or less | 14–30 days; never 0 (validated at startup) |
 | `app.user.deletion.quiet-period` | Wait after the Keycloak delete before finalising | 1 minute | 10 minutes |
 | `app.user.deletion.required-participants` | Services that must confirm each new deletion | empty until they exist | every service storing per-user data |
-| `app.user.deletion.promoter.interval-ms` / `.batch-size` (implemented); `.keycloak.*`, `.finaliser.*` (planned) | Interval and batch size of each job; the promoter does one batch per tick | a few seconds | tens of seconds |
-| Keycloak admin client | Base URL, client id, secret (environment variable), timeouts, breaker | local container | real realm |
+| `app.user.deletion.promoter.interval-ms` / `.batch-size` and `app.user.deletion.keycloak.interval-ms` / `.batch-size` (implemented); `.finaliser.*` (planned) | Interval and batch size of each job; each does one batch per tick | a few seconds | tens of seconds |
+| `app.keycloak.admin.*` (implemented) | `base-url`, `realm`, `client-id`, `client-secret` (from `USER_SERVICE_ADMIN_CLIENT_SECRET`), `connect-timeout`, `read-timeout`, `token-refresh-margin`, `retry.max-attempts` / `.wait`, `circuit-breaker.sliding-window-size` / `.minimum-calls` / `.failure-rate-threshold` / `.wait-in-open-state` / `.half-open-calls` | local container | real realm, `http://keycloak:8080` inside the compose network |
 
-The scheduler pool (`spring.task.scheduling.pool.size`) needs at least as many threads as jobs that can be busy at once: the relay, the promoter, the Keycloak job and the finaliser (plus the daily outbox purge).
+The scheduler pool (`spring.task.scheduling.pool.size`) needs at least as many threads as jobs that can be busy at once: the relay, the promoter, the Keycloak job and the finaliser (plus the daily outbox purge); it is 6 today.
 
 ## 15. What has been verified, and what has not
 
@@ -433,4 +482,6 @@ Checked on Keycloak 26.7.3 in throwaway containers (October 2026):
 
 All of the above about the realm is repeated on every build by `KeycloakRealmIT` (the real realm file in the real Keycloak image, with Mailpit).
 
-Not yet verified (each is covered by a test when built): the admin API's session logout and forced password reset used by the "secure my account" step; a protocol mapper that puts `auth_time` into the access token; Resilience4j's runtime behaviour on Spring Boot 4.
+Not yet verified (each is covered by a test when built): the admin API's session logout and forced password reset used by the "secure my account" step; a protocol mapper that puts `auth_time` into the access token.
+
+Checked in step 5f against the real image and realm file by `KeycloakAdminClientIT`: the service account's token request and its rights are enough for the two calls the client makes (a delete answers 204, a second delete and a delete of an unknown id answer 404, a lookup answers 200 or 404); a deleted user can no longer log in (the direct grant answers 400 `invalid_grant`) and their address can be registered again at once; a wrong client secret is answered 401 by the token endpoint. Resilience4j used programmatically (no Spring integration) works on Spring Boot 4 (`KeycloakAdminRestClientTest`: retry, breaker opening, half-open probes, closing).

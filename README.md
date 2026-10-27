@@ -38,10 +38,10 @@ The owner of "who is this user". It is the only service that talks to the identi
 ### What it does
 
 - **Identity comes from Keycloak.** There is no sign-up or password code here. The service is an OAuth2 resource server and validates the JWT: issuer, audience (`aud` must contain `user-service`) and realm roles (`user`, `admin`).
-- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. The token's email is only read to create the row: a verified token email that differs from the stored one is counted (`user.email.token.mismatch`) and never written back, because a token is a copy of Keycloak's state up to 5 minutes old.
+- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. The token's email is only read to create the row: a verified token email that differs from the stored one is counted (`user.email.token.mismatch`) and never written back, because a token is a copy of Keycloak's state up to 5 minutes old. If the new account's address belongs to another account, Keycloak is asked whether that account still exists: if not (an operator deleted its user by hand) the old account is scheduled for immediate deletion and the request is answered `503` with `Retry-After`, so the retry succeeds once the address is freed; if it does exist the answer is `409`; if Keycloak cannot answer it is `503`.
 - **Self-service API.** View and update your profile, request deletion of your account.
 - **Admin API.** Paged read-only listing of users, for staff accounts (role `admin`). An admin is an identity in Keycloak only: admins have no row in the `users` table and cause no events, and calling the customer API with an admin token returns `403`.
-- **Account deletion** is a multi-service saga (choreography, no central orchestrator) with a grace period. `DELETE /me` moves the account to `DELETION_SCHEDULED` and emits `UserDeletionScheduled`: for the configured grace (`app.user.deletion.grace`) the account stays readable but read-only, and `POST /me/deletion/cancel` brings it back to `ACTIVE`. After the deadline a background promoter scrubs the account's personal data and moves it to `DELETING` (announced by `UserDeletionStarted`); the Keycloak delete and the finaliser (not implemented yet) take it on to `DELETED`. A `DELETING` or `DELETED` account gets `410 Gone` on every endpoint.
+- **Account deletion** is a multi-service saga (choreography, no central orchestrator) with a grace period. `DELETE /me` moves the account to `DELETION_SCHEDULED` and emits `UserDeletionScheduled`: for the configured grace (`app.user.deletion.grace`) the account stays readable but read-only, and `POST /me/deletion/cancel` brings it back to `ACTIVE`. After the deadline a background promoter scrubs the account's personal data and moves it to `DELETING` (announced by `UserDeletionStarted`); a job then deletes the account's Keycloak user (idempotent, retried until Keycloak answers, behind a circuit breaker) and the finaliser (not implemented yet) takes it on to `DELETED`. A `DELETING` or `DELETED` account gets `410 Gone` on every endpoint.
 - **Errors are RFC 9457 problem details**, with a stable `type`, `status`, `detail`, `instance` and `timestamp`. That includes 401 and 403 responses from the security layer.
 
 ### API
@@ -78,6 +78,7 @@ The interesting parts of this service are in how it keeps its database and Kafka
 - **Transactional outbox.** The business change and its event are written in the *same* database transaction. A relay then publishes outbox rows to Kafka. A crash can delay an event but never lose it or emit one for a rolled-back change. Design notes: [`docs/design/01-outbox-design.md`](docs/design/01-outbox-design.md).
 - **A relay that is safe to run many times.** A Postgres advisory lock lets only one instance publish at a time. Rows are sent as a pipelined batch, and only the acknowledged prefix is marked as published. If Kafka is down, the relay backs off exponentially (4 s up to 30 s) and resumes in order when it recovers. It never skips a row. Events can arrive late or twice, but not never.
 - **Operable.** Micrometer gauges for pending rows, the age of the oldest pending row (the stall alarm) and the consecutive failed ticks. Published rows are purged after 7 days.
+- **Keycloak is never called inside a database transaction.** The jobs that talk to Keycloak read their work list, call Keycloak, then write one guarded `UPDATE`: a slow or dead Keycloak holds no connection and no lock, and two instances doing the same account is harmless because the delete is idempotent. The admin client has 1 s / 3 s timeouts, one retry for transient failures, and a circuit breaker whose state is a metric.
 - **Compare-and-set state changes.** Every status change is `UPDATE ... WHERE status = '<expected>'`, and it only emits an event if a row was actually changed. Concurrent requests cannot double-emit.
 - **The database owns time.** `created_at` has a default and `updated_at` is stamped by a trigger. Event timestamps come from the row as the database stored it.
 - **Idempotent consumers** are prepared with a `processed_events` table. No consumer uses it yet, because user-service does not consume anything until the deletion saga lands.
@@ -105,17 +106,19 @@ With plain `docker compose up -d` (no profile) the service still works and serve
 
 ### 2. Run the service
 
-`.env` is only read by Docker, so export the database password in your shell. It is the same value as in `.env`.
+`.env` is only read by Docker, so export the database password and the Keycloak admin-client secret in your shell. They are the same values as in `.env` (the secret is what lets user-service delete Keycloak users; the service does not start without it).
 
 ```powershell
 # PowerShell
 $env:USER_DB_PASSWORD = "password"
+$env:USER_SERVICE_ADMIN_CLIENT_SECRET = "<the value from .env>"
 .\mvnw.cmd -pl services/user-service -am spring-boot:run
 ```
 
 ```bash
 # bash
 export USER_DB_PASSWORD=password
+export USER_SERVICE_ADMIN_CLIENT_SECRET=<the value from .env>
 ./mvnw -pl services/user-service -am spring-boot:run
 ```
 
@@ -202,6 +205,7 @@ user-service has more than 200 test cases. Highlights:
 - **Schema tests** that exercise every constraint, default and trigger directly against Postgres, plus a migration-upgrade test that upgrades a populated V7 database to the latest version.
 - **Native query tests** that check row counts, compare-and-set guards and optimistic-locking conflicts.
 - **Relay tests against real Postgres and Kafka**: a 120-row backlog drained in one tick, two instances competing for the advisory lock, the broker paused with `docker pause` (nothing marked as published, real cause stored, recovery in order, no payload in logs), and backoff timing checked with a fake clock.
+- **Keycloak admin client tests**: a WireMock server plays Keycloak (slow, down, connection reset, 5xx, rejected token, token expiry, circuit open and half-open), and the same client is checked against the real Keycloak image with the project's realm file. The deletion and orphan-address flows run end to end with the real scheduler.
 - Tests are *mutation-checked*: a test is only trusted after the code it covers has been deliberately broken and the test has failed.
 
 - **Security tests** against the real security configuration: real RS256-signed tokens with keys served from a local JWKS endpoint, a role matrix of 14 token shapes across every route, forged, unsigned, expired and wrong-audience tokens, CORS, method security in isolation, key rotation and key-endpoint outages, and an integration test proving an admin account never gets a user row or an event. The security classes have 100 % line and branch coverage.
@@ -266,6 +270,6 @@ It is a single Maven reactor: the root `pom.xml` aggregates every module and man
 | Identity | Keycloak 26 |
 | Time series | InfluxDB 3 Core (usage-service) |
 | Observability | Spring Actuator, Micrometer |
-| Resilience | Resilience4j (planned for the Keycloak admin client) |
+| Resilience | Resilience4j (circuit breaker and retry in the Keycloak admin client) |
 | Testing | JUnit 5, Mockito, Testcontainers, Awaitility |
 | Build / CI | Maven multi-module, GitHub Actions, Docker Compose |
