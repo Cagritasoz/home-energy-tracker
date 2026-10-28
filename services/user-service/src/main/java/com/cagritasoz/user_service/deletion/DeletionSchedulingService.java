@@ -52,6 +52,7 @@ public class DeletionSchedulingService {
     public UserResponse scheduleDeletion(UUID id) {
 
         // Duration.toString() is an ISO-8601 duration ("PT5M"), which the query casts to a Postgres interval.
+        // Winning case
         if (userRepository.scheduleDeletion(id, grace.toString()) == 1) {
 
             // The update was native, so this is a fresh read (clearAutomatically): the new version, the
@@ -65,6 +66,7 @@ public class DeletionSchedulingService {
 
         }
 
+        // Losing case, check status and act accordingly.
         User user = userRepository.findById(id).orElseThrow(UserNotFoundException::new);
 
         return switch (user.getStatus()) {
@@ -91,7 +93,7 @@ public class DeletionSchedulingService {
     @Transactional
     public void scheduleForImmediateDeletion(UUID id) {
 
-        if (userRepository.scheduleDeletion(id, Duration.ZERO.toString()) == 1) {
+        if (userRepository.scheduleDeletion(id, Duration.ZERO.toString()) == 1) { // Grace is 0 on purpose.
 
             User scheduled = userRepository.findById(id)
                     .orElseThrow(() -> new IllegalStateException("User " + id + " missing after scheduleDeletion."));

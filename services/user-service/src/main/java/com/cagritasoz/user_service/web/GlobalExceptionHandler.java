@@ -89,7 +89,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     //
     // The account is DELETING or DELETED: 410 Gone, not 403. Nothing is being forbidden to this user - the
     // resource they are asking about no longer exists - so this is not an access-denied case and does not
-    // belong under the TODO on the two handlers after it.
+    // belong under the "TODO" on the two handlers after it.
     @ExceptionHandler(AccountDeletedException.class)
     public ProblemDetail handleAccountDeletedException(AccountDeletedException e) {
         return problem(HttpStatus.GONE, "account-deleted", "Account deleted", e.getMessage());

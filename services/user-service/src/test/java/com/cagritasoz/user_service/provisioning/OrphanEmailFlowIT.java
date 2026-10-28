@@ -123,7 +123,7 @@ class OrphanEmailFlowIT {
 
     }
 
-    private int rowsOfNewAccount() {
+    private Integer rowsOfNewAccount() {
 
         return jdbc.queryForObject("SELECT count(*) FROM users WHERE id = ?", Integer.class, NEW_ID);
 

@@ -11,7 +11,7 @@ import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 
 // The gauge that makes the circuit breaker visible, and the breaker settings that come out of the configuration. The
-// client's behaviour around them is in KeycloakAdminRestClientTest.
+// client's behavior around them is in KeycloakAdminRestClientTest.
 class KeycloakAdminConfigTest {
 
     private final KeycloakAdminConfig config = new KeycloakAdminConfig();
@@ -61,8 +61,8 @@ class KeycloakAdminConfigTest {
         var predicate = retry.getRetryConfig().getExceptionPredicate();
 
         assertThat(retry.getRetryConfig().getMaxAttempts()).isEqualTo(3);
-        assertThat(predicate.test(new KeycloakUnavailableException("timeout", true))).isTrue();
-        assertThat(predicate.test(new KeycloakUnavailableException("forbidden", false))).isFalse();
+        assertThat(predicate.test(new KeycloakUnavailableException("timeout", true))).isTrue(); // retriable = true
+        assertThat(predicate.test(new KeycloakUnavailableException("forbidden", false))).isFalse(); // not retriable = false
         assertThat(predicate.test(new KeycloakCircuitOpenException(null))).isFalse();
         assertThat(predicate.test(new IllegalStateException("a bug"))).isFalse();
 

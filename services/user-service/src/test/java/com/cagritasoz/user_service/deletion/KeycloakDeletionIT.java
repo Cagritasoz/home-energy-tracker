@@ -84,7 +84,7 @@ class KeycloakDeletionIT {
         jdbc.execute("TRUNCATE TABLE outbox_events, user_deletion_participants, users RESTART IDENTITY CASCADE");
 
     }
-
+    // keycloak_deleted_at is null.
     private void insertDeletingUser(UUID id) {
 
         jdbc.update("""
@@ -101,7 +101,7 @@ class KeycloakDeletionIT {
 
     }
 
-    private int version(UUID id) {
+    private Integer version(UUID id) {
 
         return jdbc.queryForObject("SELECT version FROM users WHERE id = ?", Integer.class, id);
 
@@ -114,13 +114,13 @@ class KeycloakDeletionIT {
 
         insertDeletingUser(ID);
         AtomicBoolean transactionOpenDuringTheCall = new AtomicBoolean(true);
-        keycloak.hasUser(ID).onDelete(id -> transactionOpenDuringTheCall.set(
+        keycloak.hasUser(ID).onDelete(id -> transactionOpenDuringTheCall.set( // register consumer
                 TransactionSynchronizationManager.isActualTransactionActive()));
 
         boolean stamped = service.deleteFromKeycloak(ID);
 
         assertThat(stamped).isTrue();
-        assertThat(transactionOpenDuringTheCall).as("a transaction was open during the Keycloak call").isFalse();
+        assertThat(transactionOpenDuringTheCall).as("a transaction was open during the Keycloak call").isFalse(); // Assert that no transaction.
         assertThat(keycloak.deleteCalls()).containsExactly(ID);
         assertThat(keycloakDeletedAt(ID)).isNotNull();
         assertThat(version(ID)).isOne();

@@ -99,8 +99,8 @@ public class KeycloakAdminConfig {
 
         RetryConfig config = RetryConfig.custom()
                 .maxAttempts(maxAttempts)
-                .waitDuration(wait)
-                .retryOnException(e -> e instanceof KeycloakUnavailableException unavailable && unavailable.retryable())
+                .waitDuration(wait) // The delay between retry attempts.
+                .retryOnException(e -> e instanceof KeycloakUnavailableException unavailable && unavailable.retryable()) // retry if transient
                 .build();
 
         return Retry.of("keycloak-admin", config);

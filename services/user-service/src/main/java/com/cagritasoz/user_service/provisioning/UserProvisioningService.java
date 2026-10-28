@@ -60,7 +60,7 @@ public class UserProvisioningService {
         }
         catch (EmailHeldByAnotherAccount e) {
 
-            // The transaction has rolled back (nothing was written); the new account cannot be created while another
+            // The transaction has rolled back and has ended (nothing was written); the new account cannot be created while another
             // account holds its address. Find out whether that account is real, and tell the client what to do.
             resolveEmailCollision(token);
 

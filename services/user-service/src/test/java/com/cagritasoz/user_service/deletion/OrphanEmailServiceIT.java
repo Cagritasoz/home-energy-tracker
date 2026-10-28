@@ -51,7 +51,7 @@ class OrphanEmailServiceIT {
     static class Fakes {
 
         @Bean
-        ScriptedKeycloakAdmin keycloakAdmin() {
+        ScriptedKeycloakAdmin keycloakAdmin() { // implements KeycloakAdmin interface.
 
             return new ScriptedKeycloakAdmin();
 
@@ -134,7 +134,7 @@ class OrphanEmailServiceIT {
 
         assertThat(service.releaseIfOrphaned(EMAIL)).isEqualTo(OrphanEmailService.Outcome.ORPHAN_RELEASING);
 
-        assertThat(statusOf(oldId)).isEqualTo("DELETION_SCHEDULED");
+        assertThat(statusOf(oldId)).isEqualTo("DELETION_SCHEDULED"); // Deletion is scheduled immediately.
         assertThat(eventTypes()).containsExactly("UserDeletionScheduled");
         assertThat(userRepository.findIdsDueForPromotion(10)).containsExactly(oldId);
 
@@ -142,6 +142,7 @@ class OrphanEmailServiceIT {
 
         assertThat(statusOf(oldId)).isEqualTo("DELETING");
         assertThat(userRepository.insertIgnoringConflict(newId, EMAIL, "New")).as("the address is free now").isOne();
+        // No UserRegistered event since provisioning method is not called, only userRepo is called.
         assertThat(eventTypes()).containsExactly("UserDeletionScheduled", "UserDeletionStarted");
 
     }

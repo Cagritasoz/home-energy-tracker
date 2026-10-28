@@ -95,7 +95,7 @@ class KeycloakAdminRestClientTest {
 
     // Short timeouts and pauses so the failure cases run in well under a second each; the real values are in
     // application.yaml. The breaker's window is 4 calls with a 50 % threshold, so four straight failures open it.
-    private CircuitBreaker breaker = KeycloakAdminConfig.circuitBreaker(4, 4, 50f, Duration.ofSeconds(30), 2);
+    private final CircuitBreaker breaker = KeycloakAdminConfig.circuitBreaker(4, 4, 50f, Duration.ofSeconds(30), 2);
 
     private KeycloakAdminRestClient client(int retryAttempts) {
 
@@ -143,8 +143,6 @@ class KeycloakAdminRestClientTest {
         return KEYCLOAK.findAll(postRequestedFor(urlPathEqualTo(TOKEN_PATH))).size();
 
     }
-
-    // ---------------------------------------------------------------- the token
 
     @Test
     void deleteUser_asksForATokenWithTheClientCredentialsAndSendsItAsABearerToken() {

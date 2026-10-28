@@ -79,7 +79,7 @@ public class KeycloakDeletionJob {
                 // Not counted as a failure of this account: it was not tried. The rest would be refused as well.
                 log.warn("Keycloak's circuit breaker is open; ending this tick with {} accounts still pending", pending.size());
 
-                return;
+                return; // stop the tick.
 
             }
             catch (KeycloakUnavailableException e) {

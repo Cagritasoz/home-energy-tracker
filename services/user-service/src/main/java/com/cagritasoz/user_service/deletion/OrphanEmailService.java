@@ -100,7 +100,7 @@ public class OrphanEmailService {
 
         }
 
-        schedulingService.scheduleForImmediateDeletion(account.getId());
+        schedulingService.scheduleForImmediateDeletion(account.getId()); //
 
         releasedCounter.increment();
         log.warn("Account {} has no Keycloak user any more; scheduled it for immediate deletion to free its email address", account.getId());

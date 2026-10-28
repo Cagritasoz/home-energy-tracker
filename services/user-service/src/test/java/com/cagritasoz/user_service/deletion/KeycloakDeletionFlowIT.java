@@ -73,9 +73,10 @@ class KeycloakDeletionFlowIT {
 
     private static final String ANY_USER_PATH = "/admin/realms/energy-tracker/users/.*";
 
+    // Tell JUnit to register the WireMock extension so that it can manage its lifecycle and run its setup and cleanup callbacks.
     @RegisterExtension
     static final WireMockExtension KEYCLOAK = WireMockExtension.newInstance()
-            .options(wireMockConfig().dynamicPort())
+            .options(wireMockConfig().dynamicPort()) // dynamic port again for available ports.
             .build();
 
     @DynamicPropertySource
@@ -129,7 +130,7 @@ class KeycloakDeletionFlowIT {
 
     private boolean keycloakDeleted() {
 
-        return jdbc.queryForObject("SELECT keycloak_deleted_at IS NOT NULL FROM users WHERE id = ?", Boolean.class, USER_ID);
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT keycloak_deleted_at IS NOT NULL FROM users WHERE id = ?", Boolean.class, USER_ID));
 
     }
 
@@ -142,7 +143,7 @@ class KeycloakDeletionFlowIT {
     // The user asks for the deletion over HTTP and the rest happens by itself.
     private void provisionAndRequestDeletion() throws Exception {
 
-        call(Route.ME_GET).andExpect(status().isOk());
+        call(Route.ME_GET).andExpect(status().isOk()); // Provision happens first.
         call(Route.ME_DELETE).andExpect(status().isAccepted());
 
     }
@@ -172,7 +173,7 @@ class KeycloakDeletionFlowIT {
 
         await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(100)).until(this::keycloakDeleted);
 
-        // Promoted first, deleted in Keycloak after, stamped at the end; the account stays DELETING (the finaliser is a
+        // Promoted first, deleted in Keycloak after, stamped at the end; the account stays DELETING (the finalizer is a
         // later step) and never became anything else on the way.
         assertThat(storedStatus()).isEqualTo("DELETING");
         assertThat(jdbc.queryForObject("SELECT keycloak_deleted_at >= deletion_started_at FROM users WHERE id = ?", Boolean.class, USER_ID)).isTrue();
@@ -214,7 +215,7 @@ class KeycloakDeletionFlowIT {
     @Test
     void keycloakDown_theAccountWaitsAndIsFinishedWhenKeycloakIsBack() throws Exception {
 
-        keycloakAnswersDeletesWith(503);
+        keycloakAnswersDeletesWith(503); // Service unavailable
         double failuresBefore = counter("user.deletion.keycloak.failures");
 
         provisionAndRequestDeletion();

@@ -98,7 +98,7 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
 
             int status = send(id, true);
 
-            // 204 = deleted now, 404 = not there (any more): both leave the system in the state asked for.
+            // 204 = deleted now, 404 = not there (anymore): both leave the system in the state asked for.
             if (status != 204 && status != 404) {
 
                 throw failureFor("Keycloak answered " + status + " to a user delete", status);
@@ -136,8 +136,16 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
 
     }
 
+    // By default, any Exception thrown out of the supplier is a failure, config sets no recordExceptions, ignoreExceptions or recordFailurePredicate.
+    // See circuit breaker config.
     private <T> T call(Supplier<T> attempt) {
 
+        // Register the protected call and decorate the circuit breaker with the retry.
+        // "attempt" supplier is the protected call.
+        // When relay was designed with a circuit breaker we were reacting to BatchResult values and were manually calling onSuccess, onError
+        // Here though the decorated supplier "guarded" wraps the protected call and manually calls onError if it catches an exception
+        // if it doesn't catch an exception calls onSuccess. CallNotPermittedException is still caught by us because at the start
+        // circuitBreaker.acquirePermission() is attempted which can throw it.
         Supplier<T> guarded = Retry.decorateSupplier(retry, CircuitBreaker.decorateSupplier(circuitBreaker, attempt));
 
         try {
@@ -192,16 +200,20 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
 
     }
 
-    // 401 (stale token), 408, 429 and every 5xx may pass on their own; any other status (403 for a missing role, 400,
+    // 401 (stale token), 408 (request timeout), 429 (Too many requests)
+    // and every 5xx may pass on their own; any other status (403 for a missing role, 400,
     // ...) will not, and a retry would only repeat it.
     private KeycloakUnavailableException failureFor(String message, int status) {
 
+        // Decide if transient, transient = retryable
         boolean transientStatus = status == 401 || status == 408 || status == 429 || status >= 500;
 
         return new KeycloakUnavailableException(message, transientStatus);
 
     }
 
+    // synchronized because service has several callers on different threads
+    // The Keycloak deletion job scheduler thread and request threads (the orphan-email check during provisioning)
     private synchronized String accessToken() {
 
         Instant now = clock.instant();
@@ -224,6 +236,7 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
 
     private CachedToken fetchToken(Instant now) {
 
+        // In a MultiValueMap a key can hold multiple values unlike a normal HashMap where the keys value is replaced.
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grant_type", "client_credentials");
         form.add("client_id", clientId);
