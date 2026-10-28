@@ -1,6 +1,6 @@
 # Account-deletion saga
 
-How user-service deletes an account, and how the other services follow. This is the design the code is built to; it was settled in October 2026 after several rounds of review and replaces the earlier "delete immediately, irreversible" plan. It is self-contained: it needs neither the project blueprint nor `01-outbox-design.md` / `02-processed-events-design.md`, though it builds on both (transactional outbox, `processed_events`).
+How user-service deletes an account, and how the other services follow. This is the design the code is built to, and it is kept in step with the code and the plan: when either changes, this document changes in the same change (section 17 holds the roadmap and what is done). It replaces the earlier "delete immediately, irreversible" plan and builds on `01-outbox-design.md` (the transactional outbox) and `02-processed-events-design.md` (consumer deduplication).
 
 ## 1. Goals and non-goals
 
@@ -485,3 +485,33 @@ All of the above about the realm is repeated on every build by `KeycloakRealmIT`
 Not yet verified (each is covered by a test when built): the admin API's session logout and forced password reset used by the "secure my account" step; a protocol mapper that puts `auth_time` into the access token.
 
 Checked in step 5f against the real image and realm file by `KeycloakAdminClientIT`: the service account's token request and its rights are enough for the two calls the client makes (a delete answers 204, a second delete and a delete of an unknown id answer 404, a lookup answers 200 or 404); a deleted user can no longer log in (the direct grant answers 400 `invalid_grant`) and their address can be registered again at once; a wrong client secret is answered 401 by the token endpoint. Resilience4j used programmatically (no Spring integration) works on Spring Boot 4 (`KeycloakAdminRestClientTest`: retry, breaker opening, half-open probes, closing).
+
+## 16. Code and tests
+
+The saga's code is in user-service's `deletion` package (scheduling, promotion, the Keycloak job, orphan email handling), `keycloak` (the admin client), `provisioning` (the status gate, the orphan collision), `outbox` (the events) and `admin` (the participant view); `docs/open/02-user-service-status.md` has the package table. The tests sit with their feature:
+
+- **Schema**: `UserSchemaIT` (every new check with an accepted and a rejected case built from a legal row of the status, both indexes), `UserDeletionParticipantsSchemaIT` (defaults, primary key, foreign key, name format, acked-or-waived, the ack `UPDATE`'s row counts, the partial index), `MigrationUpgradeIT` (a V10 database with `DELETING` and `DELETED` rows is backfilled, the old columns are gone).
+- **Scheduling, cancel and the HTTP contract**: `DeletionSchedulingServiceTest` (every row-count outcome of schedule and cancel: which event is written, which answer the caller gets, the grace validation), `DeletionStatusMatrixIT` (the table in section 6 over HTTP: every customer route against `ACTIVE`, scheduled, scheduled but overdue, `DELETING` and `DELETED`, each checked for the answer, the events written and the status the row ends in; plus the configured grace and schedule-cancel-schedule), the controller, handler, provisioning and admin tests, and the outbox and contract tests for the four deletion events.
+- **Provisioning and the email counter**: cases in `UserProvisioningServiceTest` (counted and nothing written, counted on every request, a scheduled account counted, six token shapes that must not count, a gone account never compared) and two in `SecurityFlowIT`.
+- **Promoter**: `DeletionPromotionServiceTest` (what a won claim writes and in which order, a lost claim writes nothing, the required set's start-up validation and copy), `DeletionPromotionJobTest` (one batch per tick, a failing account does not stop the others, counters, no message in the log), the `UserRepositoryIT` cases for the work list and the claim, `UserDeletionParticipantRepositoryIT`, `DeletionPromotionIT`, `DeletionPromotionConcurrencyIT` (staged races: a cancel holding the lock beats a late promoter, a promoter holding it beats a cancel that began inside the grace period and gets 410, two promoters promote once, two whole jobs on 40 accounts, a failing event insert rolls everything back), `DeletionPromotionFlowIT` (HTTP with the real scheduler and a 2 s grace: a scheduled account becomes `DELETING`, scrubbed, with participants and events in order and 410 everywhere; a cancelled account is never promoted).
+- **Keycloak admin client**: `KeycloakAdminRestClientTest` runs the real client against WireMock (a fake clock for token expiry, short timeouts, no Docker): token request and bearer header, caching, renewal at expiry minus the margin, 401 renewal, wrong secret, 404, 5xx, 403, slow, connection reset, garbage, nothing listening, no response body in any message, the breaker opening, refusing without sending, half-open probes, a 404 never opening it. `KeycloakAdminConfigTest`; `KeycloakAdminClientIT` runs the real client against the real image and realm file.
+- **Hard-delete job and orphan collision**: `KeycloakDeletionJobTest`, `KeycloakDeletionServiceTest`, `OrphanEmailServiceTest`, `GlobalExceptionHandlerTest` and `ProvisioningInterceptorWiringTest` (statuses and `Retry-After`); `ScriptedKeycloakAdmin` (`testsupport/keycloak/`) is a `KeycloakAdmin` whose answers a test writes in advance, used by `KeycloakDeletionIT` (no transaction during the call, proven with the transaction state seen from inside the call; recovery after a crash between call and stamp; two instances inside Keycloak at the same moment) and `OrphanEmailServiceIT` (the chain to a free address); `KeycloakDeletionFlowIT` and `OrphanEmailFlowIT` are full-context tests over HTTP with the real scheduler and a WireMock Keycloak, including Keycloak down and then back.
+
+Practice: every test above was mutation-checked (the code it guards was broken, the test confirmed to fail, the file restored byte for byte). Full-context tests that run a fast scheduler close their context after the class (`@DirtiesContext(AFTER_CLASS)`), and the ones that must not run a job set its interval to a day (`app.user.deletion.promoter.interval-ms`, `app.user.deletion.keycloak.interval-ms`, the relay's): a cached context keeps its jobs ticking against the shared database and would promote the next class's seeded rows.
+
+## 17. Roadmap
+
+Each step lands with its tests and an update of this document.
+
+| Step | What | State |
+|---|---|---|
+| 5a | Keycloak realm and compose: profile lock, `verifyEmail`, `resetPasswordAllowed`, the `email` listener limited to password changes, admin events, SMTP and Mailpit, the `user-service-admin` client; `RealmFileTest`, `KeycloakRealmIT` | done |
+| 5b | Migrations V11–V14 (section 5) | done |
+| 5c | State machine and HTTP: `DELETION_SCHEDULED`, schedule and cancel, the four events with fixtures, participants in the admin view | done |
+| 5d | Provisioning: no email sync, the mismatch counter | done |
+| 5e | Promoter | done |
+| 5f | Keycloak admin client, hard-delete job, orphan email collision | done |
+| 5g | `device.events.v1` and its `UserDevicesDeleted` event with a fixture in `contracts`; the ack consumer and handler registry with start-up validation of the required set; the topic and its dead-letter topic in `kafka-topics.sh` and the `.dlt` resolver; the finaliser and `UserDeletionFinalized` (with fixture); the watchdog gauges (scheduled count, age of the oldest `DELETING` row, age of the oldest pending Keycloak delete, pending acks per participant, circuit state); consumer tests with hand-crafted messages; an end-to-end run with an empty required set, then with `devices` required and a hand-produced `UserDevicesDeleted` | next |
+| 5h | Concurrency and failure tests: two finalisers, the races in section 11 not yet covered, Keycloak down during promotion; README and this document brought up to date | after 5g |
+
+Not part of the saga, planned separately (`docs/open/03-roadmap.md`): the email change (section 10.4), admin write endpoints, a recent-login check on `DELETE /me`, retention for personal data in `user.events.v1`, a reconcile of diverged emails and of orphaned accounts (section 13).

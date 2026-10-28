@@ -75,7 +75,7 @@ Topic `user.events.v1`, keyed by user id, JSON envelope defined in the shared [`
 
 The interesting parts of this service are in how it keeps its database and Kafka consistent. Both are covered by tests that run against real Postgres and Kafka containers.
 
-- **Transactional outbox.** The business change and its event are written in the *same* database transaction. A relay then publishes outbox rows to Kafka. A crash can delay an event but never lose it or emit one for a rolled-back change. Design notes: [`docs/design/01-outbox-design.md`](docs/design/01-outbox-design.md).
+- **Transactional outbox.** The business change and its event are written in the *same* database transaction. A relay then publishes outbox rows to Kafka. A crash can delay an event but never lose it or emit one for a rolled-back change. Design: [`docs/design/01-outbox-design.md`](docs/design/01-outbox-design.md); consumer side: [`docs/design/02-processed-events-design.md`](docs/design/02-processed-events-design.md).
 - **A relay that is safe to run many times.** A Postgres advisory lock lets only one instance publish at a time. Rows are sent as a pipelined batch, and only the acknowledged prefix is marked as published. If Kafka is down, the relay backs off exponentially (4 s up to 30 s) and resumes in order when it recovers. It never skips a row. Events can arrive late or twice, but not never.
 - **Operable.** Micrometer gauges for pending rows, the age of the oldest pending row (the stall alarm) and the consecutive failed ticks. Published rows are purged after 7 days.
 - **Keycloak is never called inside a database transaction.** The jobs that talk to Keycloak read their work list, call Keycloak, then write one guarded `UPDATE`: a slow or dead Keycloak holds no connection and no lock, and two instances doing the same account is harmless because the delete is idempotent. The admin client has 1 s / 3 s timeouts, one retry for transient failures, and a circuit breaker whose state is a metric.
@@ -252,7 +252,8 @@ services/
   usage-service/      Prototype
 infra/                docker-compose.yml, Keycloak realm, Kafka topic script
 scripts/              get-token.ps1: a dev access token from Keycloak
-docs/design/          Design notes (outbox, processed-events)
+docs/open/            General documents: overview, status, roadmap, conventions, testing, decisions, gaps
+docs/design/          One design document per feature (outbox, processed-events, account-deletion saga)
 e2e/                  End-to-end test module (stub)
 .github/workflows/    CI
 ```

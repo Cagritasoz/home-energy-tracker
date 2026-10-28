@@ -34,7 +34,7 @@ The user-profile configuration is the one part of the realm file that is unreada
 
 (Paths without a host are on `http://localhost:8080`.)
 
-Seeded accounts (local only; blueprint rule: deterministic ids are never allowed in a real realm):
+Seeded accounts (local only; deterministic ids must never be used in a real realm):
 
 | Account | Password | Roles | Id |
 |---|---|---|---|
