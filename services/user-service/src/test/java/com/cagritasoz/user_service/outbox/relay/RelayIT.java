@@ -4,6 +4,7 @@ import com.cagritasoz.contracts.EventHeaders;
 import com.github.dockerjava.api.command.PauseContainerCmd;
 import com.github.dockerjava.api.command.UnpauseContainerCmd;
 import com.cagritasoz.contracts.user.UserEvents;
+import com.cagritasoz.user_service.kafka.KafkaProducerConfig;
 import com.cagritasoz.user_service.outbox.OutboxEvent;
 import com.cagritasoz.user_service.outbox.OutboxRepository;
 import com.cagritasoz.user_service.testsupport.containers.KafkaTestContainerConfig;
@@ -71,7 +72,7 @@ class RelayIT {
     @EnableAutoConfiguration
     @EntityScan(basePackageClasses = OutboxEvent.class)
     @EnableJpaRepositories(basePackageClasses = OutboxRepository.class)
-    @Import({OutboxBatchPublisher.class, RelayKafkaConfig.class})
+    @Import({OutboxBatchPublisher.class, KafkaProducerConfig.class})
     static class RelayTestApplication {
     }
 
@@ -326,7 +327,7 @@ class RelayIT {
                 });
 
         // Spring's default producer listener would have logged each failed record with its payload (the
-        // user's email and display name). RelayKafkaConfig silences it; the payload must not be in any log.
+        // user's email and display name). KafkaProducerConfig silences it; the payload must not be in any log.
         assertThat(output.getAll()).doesNotContain("payload='").doesNotContain("\"eventId\"");
 
         // Duplicates are allowed (the outage's abandoned sends may still arrive), losses and reordering of

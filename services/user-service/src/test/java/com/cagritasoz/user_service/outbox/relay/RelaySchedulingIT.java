@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.outbox.relay;
 
 import com.cagritasoz.contracts.EventHeaders;
 import com.cagritasoz.contracts.user.UserEvents;
+import com.cagritasoz.user_service.kafka.KafkaProducerConfig;
 import com.cagritasoz.user_service.outbox.OutboxEvent;
 import com.cagritasoz.user_service.outbox.OutboxRepository;
 import com.cagritasoz.user_service.testsupport.containers.KafkaTestContainerConfig;
@@ -61,7 +62,7 @@ class RelaySchedulingIT {
     @EnableScheduling
     @EntityScan(basePackageClasses = OutboxEvent.class)
     @EnableJpaRepositories(basePackageClasses = OutboxRepository.class)
-    @Import({OutboxBatchPublisher.class, OutboxRelay.class, OutboxMetrics.class, OutboxPurgeJob.class, RelayKafkaConfig.class})
+    @Import({OutboxBatchPublisher.class, OutboxRelay.class, OutboxMetrics.class, OutboxPurgeJob.class, KafkaProducerConfig.class})
     static class SchedulingTestApplication {
     }
 

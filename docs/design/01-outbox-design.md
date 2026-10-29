@@ -137,7 +137,7 @@ All in `application.yaml` under `spring.kafka.producer`, each with a comment, in
 - `acks=all`, `enable.idempotence=true`, `retries` at its maximum (bounded by the delivery timeout), `max.in.flight.requests.per.connection=5` (safe with idempotence), `compression.type=none`, `linger.ms=5`.
 - **Time limits drive the relay's failure behaviour.** `delivery.timeout.ms=5000` equals the relay's `send-timeout-ms`, so records the relay abandoned die in the producer at about the same moment instead of living for the default 120 s (and turning into surprise duplicates). `request.timeout.ms=3000`. `max.block.ms=1500` is short because only a failing tick ever waits for metadata.
 - **The producer's own backoff is what protects Kafka**: `retry.backoff.ms=100` up to 1000, `reconnect.backoff.ms=50` up to 1000. The relay adds no retry loop of its own against Kafka.
-- **`RelayKafkaConfig` replaces Boot's `LoggingProducerListener` with a silent one.** The default logs every failed record's key *and payload* at ERROR (an email and a display name) with a stack trace, up to 50 times per failed tick. This was found by `RelayIT`. The relay reports a failure once, with ids only: the WARN, `last_error` and the counter.
+- **`KafkaProducerConfig` replaces Boot's `LoggingProducerListener` with a silent one.** The default logs every failed record's key *and payload* at ERROR (an email and a display name) with a stack trace, up to 50 times per failed tick. This was found by `RelayIT`. The relay reports a failure once, with ids only: the WARN, `last_error` and the counter.
 
 ## 8. Ordering and duplicates
 

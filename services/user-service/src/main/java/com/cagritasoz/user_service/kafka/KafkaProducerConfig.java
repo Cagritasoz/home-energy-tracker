@@ -1,11 +1,11 @@
-package com.cagritasoz.user_service.outbox.relay;
+package com.cagritasoz.user_service.kafka;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.support.ProducerListener;
 
 @Configuration
-public class RelayKafkaConfig {
+public class KafkaProducerConfig {
 
     // Replaces Spring Boot's default LoggingProducerListener, which logs every failed send at ERROR with
     // the record's key AND payload ("Exception thrown when sending a message with key='...' and
