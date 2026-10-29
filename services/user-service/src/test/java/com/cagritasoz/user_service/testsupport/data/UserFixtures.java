@@ -56,7 +56,7 @@ public final class UserFixtures {
     // Builds on activeUser() rather than repeating every column - only what actually differs for
     // a DELETED account (the saga bookkeeping columns AdminUserResponse exposes) is overridden.
     // The timeline is the real order: asked, grace period ends, cleanup starts (the promoter ran a little late),
-    // the Keycloak user is deleted, and the finaliser marks the row DELETED after its quiet period.
+    // the Keycloak user is deleted, and the finalizer marks the row DELETED after its quiet period.
     public static User.UserBuilder deletedUser() {
         return activeUser()
                 .status(UserStatus.DELETED)

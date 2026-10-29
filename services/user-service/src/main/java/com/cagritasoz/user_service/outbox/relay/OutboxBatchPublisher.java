@@ -6,6 +6,7 @@ import com.cagritasoz.user_service.outbox.OutboxRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -36,7 +37,7 @@ public class OutboxBatchPublisher {
     private final long sendTimeoutMs;
 
     public OutboxBatchPublisher(OutboxRepository outboxRepository,
-                                KafkaTemplate<String, String> kafkaTemplate,
+                                @Qualifier("relayKafkaTemplate") KafkaTemplate<String, String> kafkaTemplate,
                                 @Value("${app.outbox.relay.batch-size}") int batchSize,
                                 @Value("${app.outbox.relay.send-timeout-ms}") long sendTimeoutMs) {
         this.outboxRepository = outboxRepository;

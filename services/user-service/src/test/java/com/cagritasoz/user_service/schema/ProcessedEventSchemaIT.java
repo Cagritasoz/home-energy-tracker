@@ -63,7 +63,7 @@ class ProcessedEventSchemaIT {
         UUID eventId = UUID.randomUUID();
         String sql = """
                 INSERT INTO processed_events (event_id, handler, event_type, aggregate_id)
-                VALUES (?, ?, 'UserDevicesDeleted', ?)
+                VALUES (?, ?, 'UserDevicesUnclaimed', ?)
                 ON CONFLICT DO NOTHING
                 """;
 
@@ -112,7 +112,7 @@ class ProcessedEventSchemaIT {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("event_id", UUID.randomUUID());
         row.put("handler", HANDLER);
-        row.put("event_type", "UserDevicesDeleted");
+        row.put("event_type", "UserDevicesUnclaimed");
         row.put("aggregate_id", UUID.randomUUID().toString());
         row.putAll(overrides);
 

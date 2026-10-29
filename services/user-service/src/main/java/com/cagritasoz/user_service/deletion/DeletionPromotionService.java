@@ -96,7 +96,7 @@ public class DeletionPromotionService {
         User started = userRepository.findById(id)
                 .orElseThrow(() -> new IllegalStateException("User " + id + " missing after promoteDeletion."));
 
-        for (String participant : requiredParticipants) {
+        for (String participant : requiredParticipants) { // Required participant are inserted then acked later in ParticipantAckListener.
 
             participantRepository.insertRequired(id, participant);
 

@@ -140,4 +140,58 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             WHERE id = :id AND status = 'DELETION_SCHEDULED' AND deletion_scheduled_for > CURRENT_TIMESTAMP
             """, nativeQuery = true)
     int bringDeletionForward(@Param("id") UUID id);
+
+    // The finalizer's work list: DELETING accounts whose Keycloak user has been gone for the whole quiet period and
+    // that no participant is still working for (every participant row is confirmed or waived; an account with no
+    // participant rows at all qualifies at once). Longest-gone first. A plain read that locks nothing, like the other
+    // work lists; finalizeDeletion below claims each account again. :quiet is an ISO-8601 duration ("PT10M").
+    @Query(value = """
+            SELECT u.id FROM users u
+            WHERE u.status = 'DELETING'
+              AND u.keycloak_deleted_at <= CURRENT_TIMESTAMP - CAST(:quiet AS interval)
+              AND NOT EXISTS (SELECT 1 FROM user_deletion_participants p
+                              WHERE p.user_id = u.id AND p.acked_at IS NULL AND p.waived_at IS NULL)
+            ORDER BY u.keycloak_deleted_at, u.id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<UUID> findIdsReadyForFinalization(@Param("quiet") String quiet, @Param("limit") int limit);
+
+    // DELETING -> DELETED, the last transition. A compare-and-set like the others, and it repeats every condition of
+    // the work list, because the list may be stale by the time the row is reached: two finalizers (or a finalizer and
+    // anything else that updates the row) serialize on the row lock, and the one that waited re-evaluates its WHERE
+    // against the committed row and matches nothing. The participant subquery can only be stale in one direction: a
+    // confirmation that commits during the statement is simply not seen yet, so the account is finalized a tick later,
+    // never too early (nothing ever turns a confirmed row back into a pending one, and rows are only added at promotion).
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE users
+            SET status = 'DELETED',
+                deleted_at = CURRENT_TIMESTAMP,
+                version = version + 1
+            WHERE id = :id AND status = 'DELETING'
+              AND keycloak_deleted_at <= CURRENT_TIMESTAMP - CAST(:quiet AS interval)
+              AND NOT EXISTS (SELECT 1 FROM user_deletion_participants p
+                              WHERE p.user_id = users.id AND p.acked_at IS NULL AND p.waived_at IS NULL)
+            """, nativeQuery = true)
+    int finalizeDeletion(@Param("id") UUID id, @Param("quiet") String quiet);
+
+    long countByStatus(UserStatus status);
+
+    // The age of the account that has been DELETING the longest, in seconds; 0 when there is none. A deletion that
+    // takes longer than its participants and the quiet period explain is stuck: the watchdog gauge that says so.
+    @Query(value = """
+            SELECT COALESCE(CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - (
+                SELECT min(deletion_started_at) FROM users WHERE status = 'DELETING'))) AS double precision), 0)
+            """, nativeQuery = true)
+    double oldestDeletingAgeSeconds();
+
+    // The same for the Keycloak delete: how long the longest-waiting DELETING account has been without its Keycloak
+    // user deleted, measured from the start of its deletion. Rising while Keycloak is healthy means one account (or the
+    // service account's rights) is stuck.
+    @Query(value = """
+            SELECT COALESCE(CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - (
+                SELECT min(deletion_started_at) FROM users
+                WHERE status = 'DELETING' AND keycloak_deleted_at IS NULL))) AS double precision), 0)
+            """, nativeQuery = true)
+    double oldestPendingKeycloakDeleteAgeSeconds();
 }

@@ -28,4 +28,24 @@ public interface UserDeletionParticipantRepository extends JpaRepository<UserDel
             ON CONFLICT (user_id, participant) DO NOTHING
             """, nativeQuery = true)
     int insertRequired(@Param("userId") UUID userId, @Param("participant") String participant);
+
+    // A participant's confirmation: 1 = this call confirmed a pending row; 0 = nothing was pending for that user and
+    // participant (the participant is not required for this deletion, the row is already confirmed, or it was waived).
+    // waived_at IS NULL matters: a waived row that also got an acked_at would break the table's acked-or-waived check
+    // and make the ack's transaction fail forever. The users row is not touched.
+    @Modifying
+    @Query(value = """
+            UPDATE user_deletion_participants
+            SET acked_at = CURRENT_TIMESTAMP
+            WHERE user_id = :userId AND participant = :participant
+              AND acked_at IS NULL AND waived_at IS NULL
+            """, nativeQuery = true)
+    int markAcked(@Param("userId") UUID userId, @Param("participant") String participant);
+
+    // How many deletions still wait for this participant: the watchdog gauge. Served by the partial index on pending rows.
+    @Query(value = """
+            SELECT count(*) FROM user_deletion_participants
+            WHERE participant = :participant AND acked_at IS NULL AND waived_at IS NULL
+            """, nativeQuery = true)
+    long countPending(@Param("participant") String participant);
 }

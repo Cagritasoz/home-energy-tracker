@@ -1,3 +1,4 @@
+
 spring:
   application:
     name: user-service
@@ -31,13 +32,18 @@ spring:
   task:
     scheduling:
       # One thread per scheduled job that can be busy at the same time: the relay, the promoter, the Keycloak delete job
-      # and (planned) the finaliser, plus the daily outbox purge. A fixedDelay job never overlaps itself, but a slow
-      # tick of one (a relay tick against a dead Kafka, a Keycloak call that times out) must not delay the others.
+      # and the finalizer, plus the two daily purges (outbox, processed events), which are short and rarely overlap. A
+      # fixedDelay job never overlaps itself, but a slow tick of one (a relay tick against a dead Kafka, a Keycloak call
+      # that times out) must not delay the others.
       pool:
         size: 6
 
   kafka:
     bootstrap-servers: localhost:9094
+
+    # The outbox relay's producer (relayKafkaTemplate, the one OutboxBatchPublisher gets). The dead-letter
+    # publisher's producer (deadLetterKafkaTemplate) is a copy of this one that differs only in what
+    # app.kafka.dead-letter-producer says. Both are declared in KafkaProducerConfig.
     producer:
        key-serializer: org.apache.kafka.common.serialization.StringSerializer
        value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -70,6 +76,68 @@ spring:
          metadata.max.age.ms: 300000
          metadata.max.idle.ms: 300000
 
+    # The consumer side: the participants' confirmations of a deletion (ParticipantAckListener). Values are read as plain
+    # strings and parsed by the listener, so a malformed message is an ordinary exception there (and goes to the
+    # dead-letter topic) instead of a deserialization failure nothing can republish.
+    consumer:
+      group-id: user-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # The container acknowledges each record itself, after the listener has committed its transaction (ack-mode below);
+      # automatic commits would acknowledge records the listener has not finished.
+      enable-auto-commit: false
+      # A group with no committed offset starts from the beginning: an event this service has never seen must not be
+      # skipped just because it was published before the group existed.
+      auto-offset-reset: earliest
+
+      # Everything below is the client's default, written down on purpose: the consumer's behavior, and with several
+      # instances of the service how the group shares its partitions and notices a dead instance, is then visible here
+      # and does not change with a client upgrade. Where a value is not the default, the comment says why.
+
+      # Only committed transactional writes are visible. Nothing in this system produces transactionally today, so
+      # it changes nothing now; it is the safe reading if a producer ever does.
+      isolation-level: read-committed
+      # How many records one poll may return. Each record is its own database transaction, and a failure discards the rest
+      # of the poll (it is fetched again), so a small poll bounds that wasted work. The events are tiny. Not the default (500).
+      max-poll-records: 100
+      fetch-min-size: 1B
+      fetch-max-wait: 500ms
+      # A consumer whose heartbeats stop for session.timeout.ms is dropped from the group and its partitions go to another
+      # instance; the heartbeat thread runs apart from the processing thread, so a long database wait does not trigger it.
+      heartbeat-interval: 3s
+
+      properties:
+        session.timeout.ms: 45000
+        # The longest allowed gap between two polls. The error handler's database pauses (30 s at most) and a slow batch
+        # of 100 records must stay far below it, or the instance is dropped from the group in the middle of working.
+        max.poll.interval.ms: 300000
+        request.timeout.ms: 30000
+        default.api.timeout.ms: 60000
+
+        # The classic group protocol: the settings above (session timeout, assignment strategy) only apply to it.
+        group.protocol: classic
+        # With more than one instance, the cooperative assignor moves only the partitions that must move when an instance
+        # joins or leaves, instead of stopping every consumer of the group for each rebalance (as a rolling deploy would).
+        # Not the default (range first).
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+
+        # Topics are created by infra/kafka/kafka-topics.sh and the broker has auto-creation off; a consumer must never
+        # create one by subscribing with a misspelled name. Not the default (true).
+        allow.auto.create.topics: false
+
+        retry.backoff.ms: 100
+        retry.backoff.max.ms: 1000
+        reconnect.backoff.ms: 50
+        reconnect.backoff.max.ms: 1000
+        connections.max.idle.ms: 540000
+        metadata.max.age.ms: 300000
+
+    listener:
+      # One offset commit per record, right after the listener returned without an exception.
+      ack-mode: record
+      # One consumer thread; the topics have three partitions, so this can go up to three without any code change.
+      concurrency: 1
+
   security:
     oauth2:
       resourceserver:
@@ -96,6 +164,13 @@ management:
         include: health
 
 app:
+  kafka:
+    # The producer that publishes records the consumer could not apply to their dead-letter topic: spring.kafka.producer.*
+    # with its own client id (the client id names a producer's metrics and shows in the broker's logs, so two producers
+    # must not share one).
+    dead-letter-producer:
+      client-id: user-service-dead-letter
+
   # outbox.relay.*: how often OutboxRelay polls outbox_events for unpublished rows, and how many
   # it takes per tick - a bounded batch so a large backlog (e.g. after downtime) is drained
   # gradually across several ticks instead of one long-running poll.
@@ -120,6 +195,14 @@ app:
        retention-days: 7
        batch-size: 1000
        cron: "0 0 3 * * *"
+
+  # processed_events: the consumer's record of events it has already applied. A redelivery cannot be older than the
+  # topics' retention (30 days), so older rows are deleted once a day, in batches.
+  processed-events:
+    purge:
+      retention-days: 30
+      batch-size: 1000
+      cron: "0 30 3 * * *"
 
   user:
     deletion:
@@ -149,6 +232,23 @@ app:
       keycloak:
         interval-ms: 3000
         batch-size: 20
+
+      # How long after the Keycloak user is deleted an account waits before it is finalized (DELETING -> DELETED): no
+      # new access token can be issued after the delete, and tokens issued before it live five minutes, so after this
+      # nothing can still be acting for the user. 1 minute in development, 10 minutes in production. Zero is allowed,
+      # a negative value stops the start.
+      quiet-period: 1m
+
+      # The finalizer closes every deletion that is ready: Keycloak user gone for the quiet period and every required
+      # participant confirmed (UserDeletionFinalized is written). One batch per tick; it makes no external call.
+      finalizer:
+        interval-ms: 3000
+        batch-size: 50
+
+      # The consumer that reads the participants' confirmations (ParticipantAckListener). On by default; a test context
+      # that has no Kafka broker turns it off, because a started listener keeps trying to reach one.
+      ack-consumer:
+        enabled: true
 
   # Keycloak's admin REST API, called with the service-account client user-service-admin (realm roles manage-users and
   # view-users only). Reachable at base-url from where user-service runs: a container on the compose network would use

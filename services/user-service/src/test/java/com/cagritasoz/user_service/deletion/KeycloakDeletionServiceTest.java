@@ -76,7 +76,7 @@ class KeycloakDeletionServiceTest {
 
     }
 
-    // The stamp must never be written for a user that may still exist: the finaliser would go on to finish an account
+    // The stamp must never be written for a user that may still exist: the finalizer would go on to finish an account
     // whose login still works.
     @Test
     void deleteFromKeycloak_keycloakFails_leavesTheRowUnstampedAndPropagates() {

@@ -26,4 +26,13 @@ create_topic() {
 
 create_topic "user.events.v1" 3 1
 
+# device-service's events about users (its confirmation of a deletion, UserDevicesUnclaimed). Created here although
+# device-service does not exist yet: user-service already consumes it, and broker auto-create is off.
+create_topic "device.events.v1" 3 1
+
+# Dead-letter topic of device.events.v1: where a consumer puts a record it can never apply (named "<topic>.dlt"; one per
+# consumed topic, shared by every consumer group of it). Low volume, so one partition. The dead-letter topic of
+# user.events.v1 is added with the first service that consumes it.
+create_topic "device.events.v1.dlt" 1 1
+
 echo "Done."

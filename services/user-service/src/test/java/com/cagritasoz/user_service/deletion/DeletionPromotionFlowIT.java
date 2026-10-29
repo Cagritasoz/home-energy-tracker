@@ -39,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.user.deletion.promoter.interval-ms=200",
         "app.user.deletion.keycloak.interval-ms=86400000",
         "app.keycloak.admin.client-secret=test-secret",
-        "app.user.deletion.required-participants=devices,usage"
+        "app.user.deletion.required-participants=devices"
 })
 @AutoConfigureMockMvc
 @Import(PostgresTestContainerConfig.class)
@@ -96,7 +96,7 @@ class DeletionPromotionFlowIT {
 
         // The completion contract of this deletion, and the announcement, in order.
         assertThat(jdbc.queryForList("SELECT participant FROM user_deletion_participants WHERE user_id = ? "
-                + "AND acked_at IS NULL ORDER BY participant", String.class, USER_ID)).containsExactly("devices", "usage");
+                + "AND acked_at IS NULL ORDER BY participant", String.class, USER_ID)).containsExactly("devices");
         assertThat(jdbc.queryForList("SELECT event_type FROM outbox_events ORDER BY seq", String.class))
                 .containsExactly("UserRegistered", "UserDeletionScheduled", "UserDeletionStarted");
 
