@@ -6,9 +6,9 @@ Shortfalls and risks that are known and not yet scheduled as part of a feature. 
 
 The gauges and counters exist (`02-user-service-status.md`) but nothing scrapes them and no alert rule exists: the Prometheus endpoint and the alert rules arrive with the observability step. Until then a stalled relay or a stuck deletion is visible only in the logs.
 
-## No consumer exists yet
+## Only one consumer exists
 
-`processed_events` (V10) is unused, the dead-letter handling is not built, and no service consumes `user.events.v1`. Everything the consumer side promises (idempotent handlers, the version guard, tombstones) is design only until device-service and user-service's own ack consumer exist (`docs/design/02-processed-events-design.md`).
+The only consumer is user-service's own, for the deletion saga's participant confirmations (`docs/design/02-processed-events-design.md`). No service consumes `user.events.v1` yet, the version guard and the tombstone that a consumer of state needs are not written, and nothing alerts on dead-letter topics until the Prometheus endpoint exists. device-service is not built, so no real confirmation is ever produced: the saga is proven with hand-produced ones.
 
 ## Operational
 

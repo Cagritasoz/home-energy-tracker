@@ -28,7 +28,9 @@
 
 **Outbox and relay**: listed in `docs/design/01-outbox-design.md`, section 15.
 
-**Saga, Keycloak admin client and the jobs around it**: listed in `docs/design/03-account-deletion-saga.md`, section 16.
+**Saga, Keycloak admin client, the finalizer and the confirmation consumer**: listed in `docs/design/03-account-deletion-saga.md`, section 16. The consumer container and `processed_events`: `docs/design/02-processed-events-design.md`, section 8.
+
+**Kafka in tests**: `testsupport/containers/KafkaTestContainerConfig` starts a broker (`@ServiceConnection`), declares the topics the application consumes (`NewTopics`, as `kafka-topics.sh` creates them) and `testsupport/kafka/KafkaTestClient` plays another service: it produces a message by hand and reads a whole topic from the beginning (the dead-letter topic, the events the relay published). A full-context test that starts the confirmation listener sets `app.user.deletion.ack-consumer.enabled=true` and closes its context after the class; every other full-context test gets the listener switched off, and the finalizer parked at a day, by `src/test/resources/application.properties`. Without a broker: `KafkaProducersWiringTest` (Boot's auto-configuration and `KafkaProducerConfig` in an `ApplicationContextRunner`: the two templates and their factories, two client ids, the connection details and factory customizers on both, the silent listener, each user getting the right template) and `KafkaConfigurationTest` (the pinned consumer settings and the two client ids, read from the real `application.yaml`).
 
 **Keycloak realm** (Docker, ~40 s each; `testsupport/containers/ComposeFile` reads image tags and the listener option from `docker-compose.yml`):
 - `RealmFileTest` (no Docker): no `"//"` keys, the embedded user profile equals `user-profile.json`.
@@ -47,7 +49,7 @@ Opt out of `@DataJpaTest`'s rolled-back transaction (`@Transactional(propagation
 
 ## What is missing
 
-- Consumer-side Kafka tests and the consumer half of the contract tests (no consumer exists yet).
+- Tests of a consumer that applies state (the version guard and the tombstone): the first one is device-service's handling of user events.
 - The saga's remaining concurrency and failure tests (`docs/design/03-account-deletion-saga.md`, section 17).
 - End-to-end tests (`e2e/` is a stub).
 

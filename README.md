@@ -41,7 +41,7 @@ The owner of "who is this user". It is the only service that talks to the identi
 - **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. The token's email is only read to create the row: a verified token email that differs from the stored one is counted (`user.email.token.mismatch`) and never written back, because a token is a copy of Keycloak's state up to 5 minutes old. If the new account's address belongs to another account, Keycloak is asked whether that account still exists: if not (an operator deleted its user by hand) the old account is scheduled for immediate deletion and the request is answered `503` with `Retry-After`, so the retry succeeds once the address is freed; if it does exist the answer is `409`; if Keycloak cannot answer it is `503`.
 - **Self-service API.** View and update your profile, request deletion of your account.
 - **Admin API.** Paged read-only listing of users, for staff accounts (role `admin`). An admin is an identity in Keycloak only: admins have no row in the `users` table and cause no events, and calling the customer API with an admin token returns `403`.
-- **Account deletion** is a multi-service saga (choreography, no central orchestrator) with a grace period. `DELETE /me` moves the account to `DELETION_SCHEDULED` and emits `UserDeletionScheduled`: for the configured grace (`app.user.deletion.grace`) the account stays readable but read-only, and `POST /me/deletion/cancel` brings it back to `ACTIVE`. After the deadline a background promoter scrubs the account's personal data and moves it to `DELETING` (announced by `UserDeletionStarted`); a job then deletes the account's Keycloak user (idempotent, retried until Keycloak answers, behind a circuit breaker) and the finaliser (not implemented yet) takes it on to `DELETED`. A `DELETING` or `DELETED` account gets `410 Gone` on every endpoint.
+- **Account deletion** is a multi-service saga (choreography, no central orchestrator) with a grace period. `DELETE /me` moves the account to `DELETION_SCHEDULED` and emits `UserDeletionScheduled`: for the configured grace (`app.user.deletion.grace`) the account stays readable but read-only, and `POST /me/deletion/cancel` brings it back to `ACTIVE`. After the deadline a background promoter scrubs the account's personal data and moves it to `DELETING` (announced by `UserDeletionStarted`); a job then deletes the account's Keycloak user (idempotent, retried until Keycloak answers, behind a circuit breaker) and, once every participant service that is required for the deletion has confirmed its cleanup (with an event of its own, read by a consumer in user-service; none is required yet, so today a deletion completes by time alone) and a quiet period after the Keycloak delete has passed, the finalizer takes it on to `DELETED` (announced by `UserDeletionFinalized`). A `DELETING` or `DELETED` account gets `410 Gone` on every endpoint.
 - **Errors are RFC 9457 problem details**, with a stable `type`, `status`, `detail`, `instance` and `timestamp`. That includes 401 and 403 responses from the security layer.
 
 ### API
@@ -69,7 +69,9 @@ Topic `user.events.v1`, keyed by user id, JSON envelope defined in the shared [`
 | `UserDeletionScheduled` | `DELETE /me` accepted (carries the deadline) |
 | `UserDeletionCancelled` | A scheduled deletion was cancelled |
 | `UserDeletionStarted` | The grace period ended and the promoter started the deletion (the account's email and name are already scrubbed) |
-| `UserDeletionFinalized` | Every service confirmed its cleanup (declared, emitted by the finaliser in a later step) |
+| `UserDeletionFinalized` | Every required service confirmed its cleanup and the quiet period after the Keycloak delete passed (emitted by the finalizer) |
+
+user-service also **consumes** `device.events.v1`: device-service's `UserDevicesUnclaimed` confirms that it no longer holds anything personal for a deleted user. Records it cannot apply go to `device.events.v1.dlt`.
 
 ### How the reliability works
 
@@ -81,7 +83,7 @@ The interesting parts of this service are in how it keeps its database and Kafka
 - **Keycloak is never called inside a database transaction.** The jobs that talk to Keycloak read their work list, call Keycloak, then write one guarded `UPDATE`: a slow or dead Keycloak holds no connection and no lock, and two instances doing the same account is harmless because the delete is idempotent. The admin client has 1 s / 3 s timeouts, one retry for transient failures, and a circuit breaker whose state is a metric.
 - **Compare-and-set state changes.** Every status change is `UPDATE ... WHERE status = '<expected>'`, and it only emits an event if a row was actually changed. Concurrent requests cannot double-emit.
 - **The database owns time.** `created_at` has a default and `updated_at` is stamped by a trigger. Event timestamps come from the row as the database stored it.
-- **Idempotent consumers** are prepared with a `processed_events` table. No consumer uses it yet, because user-service does not consume anything until the deletion saga lands.
+- **Idempotent consumers.** The consumer of the participants' confirmations claims each event in a `processed_events` table in the same transaction as its effect, so a redelivered event is applied once and a failure rolls the claim back with the effect. A message that can never be applied goes to a dead-letter topic without blocking the ones behind it; a failing database is waited out and never dead-letters anything.
 
 ---
 
@@ -102,7 +104,7 @@ docker compose --profile kafka up -d
 
 Compose starts four services by default: the Postgres database of user-service (`user-db`), the Postgres database of Keycloak (`keycloak-db`), Keycloak itself, with a pre-seeded realm and two test users, and Mailpit, a mail catcher: every mail Keycloak sends (the verification mail of a new registration, password resets, password-changed notices) lands at http://localhost:8025 instead of being delivered. `.env` must also define `USER_SERVICE_ADMIN_CLIENT_SECRET` (copy the line from `.env.example` into an existing `.env`); Keycloak uses it for the admin client of user-service. `--profile kafka` adds a single-node Kafka (KRaft) with its topics, plus Kafka UI at http://localhost:8070. Wait until `docker compose ps` shows Keycloak as healthy. The first start takes a minute.
 
-With plain `docker compose up -d` (no profile) the service still works and serves its API, but events pile up in the outbox table until Kafka is available.
+With plain `docker compose up -d` (no profile) the service still works and serves its API, but events pile up in the outbox table until Kafka is available. The listener for the participants' confirmations keeps trying to reach Kafka and logs warnings meanwhile (`app.user.deletion.ack-consumer.enabled=false` switches it off).
 
 ### 2. Run the service
 
@@ -200,17 +202,19 @@ Open `services/user-service/target/site/jacoco/index.html` in a browser. Package
 
 Unit tests are named `*Test` and run in Surefire. Integration tests are named `*IT`, use [Testcontainers](https://testcontainers.com) and run in Failsafe. CI (GitHub Actions) runs `./mvnw verify` on every push.
 
-user-service has more than 200 test cases. Highlights:
+user-service has more than 1,100 test cases. Highlights:
 
 - **Schema tests** that exercise every constraint, default and trigger directly against Postgres, plus a migration-upgrade test that upgrades a populated V7 database to the latest version.
 - **Native query tests** that check row counts, compare-and-set guards and optimistic-locking conflicts.
 - **Relay tests against real Postgres and Kafka**: a 120-row backlog drained in one tick, two instances competing for the advisory lock, the broker paused with `docker pause` (nothing marked as published, real cause stored, recovery in order, no payload in logs), and backoff timing checked with a fake clock.
 - **Keycloak admin client tests**: a WireMock server plays Keycloak (slow, down, connection reset, 5xx, rejected token, token expiry, circuit open and half-open), and the same client is checked against the real Keycloak image with the project's realm file. The deletion and orphan-address flows run end to end with the real scheduler.
+- **Consumer tests against a real broker**: confirmations produced by hand are applied once even when delivered twice, three kinds of poison message land unchanged on the dead-letter topic without blocking the records behind them, and a database that fails several times in a row is waited out without dead-lettering anything. A claim and its effect roll back together, proven with real commits.
+- **The whole deletion saga**, from `DELETE /me` to `DELETED`: with no participants by time alone, and with a participant required, waiting for a confirmation read from and produced to a real Kafka broker, with every job fired by Spring's own scheduler.
 - Tests are *mutation-checked*: a test is only trusted after the code it covers has been deliberately broken and the test has failed.
 
 - **Security tests** against the real security configuration: real RS256-signed tokens with keys served from a local JWKS endpoint, a role matrix of 14 token shapes across every route, forged, unsigned, expired and wrong-audience tokens, CORS, method security in isolation, key rotation and key-endpoint outages, and an integration test proving an admin account never gets a user row or an event. The security classes have 100 % line and branch coverage.
 
-Not written yet: concurrency tests for the deletion saga, contract fixtures and end-to-end tests (the `e2e/` module is a stub).
+Not written yet: the remaining concurrency tests of the deletion saga and cross-service end-to-end tests (the `e2e/` module is a stub).
 
 ---
 
@@ -219,7 +223,7 @@ Not written yet: concurrency tests for the deletion saga, contract fixtures and 
 The three prototype services (`device-service`, `ingestion-service`, `usage-service`) work end to end, but they predate the design and take shortcuts. For example, ingestion publishes per-tick deltas where a real meter reports a cumulative counter, and device ids are shared through a polled cache. They will be **rebuilt**, not extended, after user-service is complete.
 
 ### device-service (prototype, rebuild next)
-Owns devices: who has which meter, registration, and the per-device tokens that IoT hardware uses to authenticate. Publishes `device.events.v1` and a compacted `device.registry.v1` topic that ingestion uses to validate tokens without calling this service. Reacts to `UserDeletionRequested` by deleting the user's devices and answering with `UserDevicesDeleted`, which is the other half of the deletion saga.
+Owns devices: who has which meter, registration, and the per-device tokens that IoT hardware uses to authenticate. Publishes `device.events.v1` and a compacted `device.registry.v1` topic that ingestion uses to validate tokens without calling this service. Reacts to `UserDeletionRequested` by deleting the user's devices and answering with `UserDevicesUnclaimed`, which is the other half of the deletion saga.
 
 ### ingestion-service (prototype)
 The front door for IoT devices. Authenticates a device by its token (checked against the registry topic), validates the reading and publishes it to `energy.readings.v1`. Readings carry the **cumulative meter value** (`energy_total_kwh`) and the owning user id.

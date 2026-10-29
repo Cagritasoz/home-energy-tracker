@@ -5,7 +5,7 @@ What is planned and in what order, project-wide. A feature that has its own desi
 ## Order of work
 
 1. **user-service**, finished with real test coverage: the saga (its own roadmap), then the steps below.
-2. **device-service**, rebuilt: device tokens, the compacted registry topic `device.registry.v1`, consuming `user.events.v1` (it is the first participant of the deletion saga and confirms with `UserDevicesDeleted` on `device.events.v1`).
+2. **device-service**, rebuilt: device tokens, the compacted registry topic `device.registry.v1`, consuming `user.events.v1` (it is the first participant of the deletion saga and confirms with `UserDevicesUnclaimed` on `device.events.v1`).
 3. ingestion-, usage-, alert-, notification- and ai-insight-service, then the gateway.
 
 ## user-service: remaining steps

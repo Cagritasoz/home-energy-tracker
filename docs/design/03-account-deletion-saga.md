@@ -45,7 +45,7 @@ stateDiagram-v2
     ACTIVE --> DELETION_SCHEDULED: DELETE /users/me
     DELETION_SCHEDULED --> ACTIVE: cancel (before the deadline)
     DELETION_SCHEDULED --> DELETING: promoter (deadline reached)
-    DELETING --> DELETED: finaliser
+    DELETING --> DELETED: finalizer
     DELETED --> [*]
 ```
 
@@ -77,7 +77,7 @@ Four migrations, one concern each: `V11__users_add_deletion_schedule_and_schedul
   - `(status = 'DELETED') = (deleted_at IS NOT NULL)` (existing)
   - `keycloak_deleted_at IS NULL OR status IN ('DELETING','DELETED')`
   - `deletion_scheduled_for >= deletion_requested_at` (equal means "delete now", used by admin-initiated deletion)
-- Indexes: `idx_users_deletion_scheduled (deletion_scheduled_for) WHERE status = 'DELETION_SCHEDULED'` (the promoter's scan) and `idx_users_deleting (deletion_started_at) WHERE status = 'DELETING'` (finaliser, Keycloak job, watchdog), both partial so they stay small whatever the number of accounts. The old `idx_users_deleting` on `deletion_requested_at` is replaced.
+- Indexes: `idx_users_deletion_scheduled (deletion_scheduled_for) WHERE status = 'DELETION_SCHEDULED'` (the promoter's scan) and `idx_users_deleting (deletion_started_at) WHERE status = 'DELETING'` (finalizer, Keycloak job, watchdog), both partial so they stay small whatever the number of accounts. The old `idx_users_deleting` on `deletion_requested_at` is replaced.
 - Backfill before the constraints go on: a row already in `DELETING` or `DELETED` gets `deletion_scheduled_for` and `deletion_started_at` equal to its `deletion_requested_at` (an immediate deletion; the `DELETED` rows need the value too, because the started-at rule covers them).
 
 `user_deletion_participants` (new):
@@ -176,7 +176,7 @@ sequenceDiagram
         K-->>S: ack consumer marks that participant's row
         S->>KC: hard-delete job: delete user (404 = done)
         S->>DB: keycloak_deleted_at
-        S->>DB: finaliser: all rows satisfied and quiet period over -> DELETED + UserDeletionFinalized
+        S->>DB: finalizer: all rows satisfied and quiet period over -> DELETED + UserDeletionFinalized
         DB-->>K: relay publishes UserDeletionFinalized
         K-->>P: final sweep
     end
@@ -235,42 +235,57 @@ UPDATE users SET keycloak_deleted_at = CURRENT_TIMESTAMP, version = version + 1
 - Two instances walking the same list both call Keycloak for the same account (harmless) and both run the `UPDATE`; the compare-and-set lets one stamp and tells the other it matched nothing. The cost is that duplicated work, bounded by the batch size.
 - Failures (a timeout, a 5xx, an open circuit) leave the row as it is. A tick ends at the first call the open circuit breaker refuses, because the rest would be refused too; any other failure is counted and logged and the loop moves on to the next account.
 
-The stamp is only ever written after Keycloak has confirmed (204 or 404), never before: the finaliser trusts it to mean "this account can no longer log in".
+The stamp is only ever written after Keycloak has confirmed (204 or 404), never before: the finalizer trusts it to mean "this account can no longer log in".
 
 
-Keycloak is hard-deleted at promotion rather than disabled: from that moment the user cannot log in or refresh, and the email is free in Keycloak. Access tokens issued earlier stay valid until they expire (5 minutes), which is why the finaliser waits (8.6) and why user-service answers 410 from its own database regardless of the token.
+Keycloak is hard-deleted at promotion rather than disabled: from that moment the user cannot log in or refresh, and the email is free in Keycloak. Access tokens issued earlier stay valid until they expire (5 minutes), which is why the finalizer waits (8.6) and why user-service answers 410 from its own database regardless of the token.
 
 ### 8.5 Participants and the completion contract
 
 When a deletion starts, the promoter writes one `user_deletion_participants` row per service in `app.user.deletion.required-participants`. That set is the completion contract *for this deletion*:
 
-- A participant confirms with its own event type on its own topic (for example `UserDevicesDeleted` on `device.events.v1`; one event type per producer). The meaning is: "I deleted everything I hold for this user and I reject new writes for them." A service confirms even when it found nothing.
-- user-service has one ack handler per participant. It runs `UPDATE user_deletion_participants SET acked_at = CURRENT_TIMESTAMP WHERE user_id = :id AND participant = :p AND acked_at IS NULL` inside the usual `processed_events` transaction. Zero rows means "not required for this deletion, or already confirmed": ignore. The `users` row is not touched, so the ack never conflicts with another update and never bumps the version.
+- A participant confirms with its own event type on its own topic (for example `UserDevicesUnclaimed` on `device.events.v1`; one event type per producer, its data and a fixture in `contracts`). The meaning is: "I no longer hold anything personal for this user, and I reject new writes for them." What that covers is the participant's own business and is named by its event: device-service releases every device the user had claimed (the device records stay, unowned, so they can be claimed again), removes the user's personal data about them, revokes their credentials and refuses new claims for the user. A service confirms even when it found nothing. The confirmation carries the id of the `UserDeletionStarted` it answers as `causationId`.
+- The consumer is `ParticipantAckListener` (package `deletion.ack`), which reads the participants' topics with the group `user-service`, one record at a time. For a record it recognises (the topic and event type are in the registry, the schema version is the one it knows, the aggregate id is a user id) `ParticipantAckService` runs, in one transaction, the `processed_events` claim and `UPDATE user_deletion_participants SET acked_at = CURRENT_TIMESTAMP WHERE user_id = :id AND participant = :p AND acked_at IS NULL AND waived_at IS NULL`. Zero rows means "not required for this deletion, already confirmed, or waived": ignored and counted (the claim is kept, so the same event is not examined again); `waived_at IS NULL` is there because a waived row that also got an `acked_at` would break the table's acked-or-waived check and fail every retry. The `users` row is not touched, so the ack never conflicts with another update and never bumps the version. A claim and an update that fail together roll back together, and two copies of one event delivered at the same moment are applied once: the second waits for the first's claim and then finds it.
+- A record the consumer can never apply (not JSON, no valid event id, a schema version it does not know, an aggregate id that is not a user id) goes to `device.events.v1.dlt` at once, unchanged, with the reason in the headers and without retrying; an event type it does not know on a participant's topic is ignored (a producer must be able to add types). A database failure is retried for as long as it lasts and never dead-lettered. `docs/design/02-processed-events-design.md` has the container's rules.
 - Changing the configured set changes **future** deletions only. A deletion already in flight keeps the set it started with.
 - Adding a participant later: new deletions include it; a deletion already in flight can be given its row by a migration plus a re-emitted `UserDeletionStarted` (the participant's cleanup is idempotent).
 - Retiring a participant for good: an explicit, versioned migration sets `waived_at` on its unconfirmed rows. `waived_at` is separate from `acked_at` so an audit can tell a real confirmation from a waiver.
-- At startup the configured names are checked against the participants that have an ack handler; a typo fails the boot instead of silently stalling every deletion.
-- While the set is empty (no participant service exists yet) the saga completes by time alone.
+- **Adding a participant** to user-service is one entry in `ParticipantAcksConfig` (name, topic, event type, schema version): the listener subscribes to the topic by itself, the gauge for its pending confirmations appears, and the name becomes valid in the required set. The topic and its dead-letter topic go in `infra/kafka/kafka-topics.sh`.
+- At startup the configured names are checked against that registry (`RequiredParticipantsValidator`); a typo fails the boot instead of silently stalling every deletion. The name's format and duplicates are checked by the promoter's service.
+- While the set is empty (no participant service exists yet) the saga completes by time alone. The default configuration is empty; with `devices` required, a deletion waits for device-service.
 
-### 8.6 Finalisation
+### 8.6 Finalization
+
+The finalizer (`DeletionFinalizationJob` driving `DeletionFinalizationService`) closes a deletion when both conditions hold: the Keycloak user has been deleted for the whole quiet period, and every participant row of this deletion is confirmed or waived. Like the promoter it reads a plain work list and then finalizes each account in a transaction of its own, with the compare-and-set as the claim:
 
 ```sql
-SELECT id FROM users u
+-- the work list: a plain read, locks nothing
+SELECT u.id FROM users u
  WHERE u.status = 'DELETING'
    AND u.keycloak_deleted_at <= CURRENT_TIMESTAMP - :quiet
    AND NOT EXISTS (SELECT 1 FROM user_deletion_participants p
                     WHERE p.user_id = u.id AND p.acked_at IS NULL AND p.waived_at IS NULL)
- LIMIT :batch
- FOR UPDATE OF u SKIP LOCKED;
+ ORDER BY u.keycloak_deleted_at, u.id
+ LIMIT :batch;
+
+-- then, for each id, in a transaction of its own: the claim
+UPDATE users SET status = 'DELETED', deleted_at = CURRENT_TIMESTAMP, version = version + 1
+ WHERE id = :id AND status = 'DELETING'
+   AND keycloak_deleted_at <= CURRENT_TIMESTAMP - :quiet
+   AND NOT EXISTS (SELECT 1 FROM user_deletion_participants p
+                    WHERE p.user_id = users.id AND p.acked_at IS NULL AND p.waived_at IS NULL);
+-- 0 rows: someone else finalized it first, or a condition no longer holds; skip it. 1 row: write the event.
 ```
 
-Each match becomes `DELETED` (`deleted_at`, `version + 1`) with a `UserDeletionFinalized` outbox row. The quiet period (10 minutes in production) is measured from the Keycloak delete: no new token can be issued after it, and any token issued before it expires within 5 minutes, so after the quiet period nothing can still be acting for the user. `UserDeletionFinalized` then asks every service for a last sweep, which catches resources created by a request that passed its checks just before that service processed `UserDeletionStarted`.
+A match becomes `DELETED` with a `UserDeletionFinalized` outbox row, built from the row as the database now holds it (`occurredAt` is its `deleted_at`). The design first took a batch with `FOR UPDATE SKIP LOCKED`, and was changed to per-account transactions for the promoter's reason: an account that cannot be finalized would fail the single transaction of the batch on every tick, and being first in line it would starve all the others. The `UPDATE` repeats every condition of the work list, because the list may be stale when its row is reached: two finalizers serialise on the row lock, and the one that waited re-evaluates its `WHERE` against the committed row and matches nothing. The participant subquery can only be stale in one safe direction: a confirmation that commits during the statement is not seen yet, so the account is finalized a tick later, never too early (nothing turns a confirmed row back into a pending one, and rows are written only at promotion).
 
-A required participant that never confirms stalls finalisation for that user, and a watchdog metric names the participant. It is never forced: a stuck `DELETING` row harms nobody (the user is already gone from Keycloak and scrubbed), whereas forcing it would hide incomplete deletions.
+The quiet period (`app.user.deletion.quiet-period`, 10 minutes in production, zero allowed, negative refused at start) is measured from the Keycloak delete: no new token can be issued after it, and any token issued before it expires within 5 minutes, so after the quiet period nothing can still be acting for the user. It does not start before Keycloak has confirmed: with Keycloak failing, or before the confirmation, an account stays `DELETING` however old it is. `UserDeletionFinalized` then asks every service for a last sweep, which catches resources created by a request that passed its checks just before that service processed `UserDeletionStarted`.
+
+A required participant that never confirms stalls finalization for that user, and `user.deletion.participant.pending.acks{participant}` names it. It is never forced: a stuck `DELETING` row harms nobody (the user is already gone from Keycloak and scrubbed), whereas forcing it would hide incomplete deletions. A failing account is logged (user id and the root cause's class, never the message), counted in `user.deletion.finalization.failures`, and the loop moves on.
 
 ### 8.7 Observability
 
-The promoter has two counters already: `user.deletion.promoted` (accounts this instance moved to `DELETING`) and `user.deletion.promotion.failures` (promotions that threw; a rate above zero means an account is stuck). The Keycloak job has `user.deletion.keycloak.deleted` and `user.deletion.keycloak.failures` (a failure rate above zero means Keycloak, or the rights of the service account, are in trouble) and the admin client has the gauge `keycloak.admin.circuit.state` (0 closed, 1 half open, 2 open; alert on 2 for more than a minute). The orphan-address handling (8.8) counts `user.email.orphan.released` and `user.email.collision.live` (the second should stay at zero: it means Keycloak and our rows disagree about an address). Gauges, in the style of the existing outbox metrics: number of scheduled deletions, age of the oldest `DELETING` row, age of the oldest row still waiting for its Keycloak delete, pending confirmations per participant, circuit-breaker state of the Keycloak client; a counter for token-vs-row email mismatches (section 10). Dead-letter topics of every consumer need their own alert, because a poison `UserDeletionStarted` in a participant's dead-letter topic is the one failure that would otherwise be silent until the stall alert fires.
+The promoter has two counters: `user.deletion.promoted` (accounts this instance moved to `DELETING`) and `user.deletion.promotion.failures` (promotions that threw; a rate above zero means an account is stuck). The finalizer has `user.deletion.finalized` and `user.deletion.finalization.failures`, and the ack consumer counts `user.deletion.participant.acks` by participant and outcome (`acked`, `already_processed`, `not_pending`). The Keycloak job has `user.deletion.keycloak.deleted` and `user.deletion.keycloak.failures` (a failure rate above zero means Keycloak, or the rights of the service account, are in trouble) and the admin client has the gauge `keycloak.admin.circuit.state` (0 closed, 1 half open, 2 open; alert on 2 for more than a minute). The orphan-address handling (8.8) counts `user.email.orphan.released` and `user.email.collision.live` (the second should stay at zero: it means Keycloak and our rows disagree about an address). The watchdog gauges, read live like the outbox metrics: `user.deletion.scheduled.accounts` (accounts in the grace period), `user.deletion.deleting.oldest.age.seconds` (the longest-running deletion, 0 when none), `user.deletion.keycloak.oldest.pending.age.seconds` (how long the longest-waiting `DELETING` account has been without its Keycloak user deleted), `user.deletion.participant.pending.acks{participant}` (deletions still waiting for that participant) and `keycloak.admin.circuit.state`; plus the counter for token-vs-row email mismatches (section 10). Alert rules arrive with the Prometheus endpoint. Dead-letter topics of every consumer need their own alert, because a poison `UserDeletionStarted` in a participant's dead-letter topic is the one failure that would otherwise be silent until the stall alert fires.
 
 ### 8.8 Orphan email collision
 
@@ -401,8 +416,10 @@ The price of the last option comes from one requirement, that the email cannot c
 | Schedule, cancel, schedule again in quick succession | Events are keyed by user, so ordered; consumers compare `aggregateVersion` with `>`; `UserDeletionStarted` wins over any older event. |
 | Two promoters | Each account is claimed by a compare-and-set `UPDATE`: the second blocks on the row lock, then matches nothing. One promotion, one event, one set of participant rows (tested with staged transactions and with two whole jobs on one backlog). |
 | Two Keycloak jobs | Both may delete the same user in Keycloak (idempotent: the second gets 404, which counts as success); the guarded `UPDATE` that stamps `keycloak_deleted_at` changes the row once. No lock is held, so neither waits for the other (tested with two threads inside the Keycloak call at the same moment). |
-| Two finalisers | `FOR UPDATE SKIP LOCKED` hands disjoint rows to each. |
-| Duplicate or redelivered ack | `WHERE acked_at IS NULL` plus `processed_events`: a no-op. |
+| Two finalizers | Each account is claimed by a compare-and-set `UPDATE` that repeats every condition: the second blocks on the row lock, then matches nothing. One finalization, one `UserDeletionFinalized`. |
+| Duplicate or redelivered ack | The `processed_events` claim and the participant update are one transaction: a second copy finds the claim and does nothing; two copies at the same moment are applied once (the second waits for the first's claim; tested with real commits). A new copy with a new event id for a row already confirmed finds nothing pending and is ignored. |
+| A confirmation before the Keycloak delete or inside the quiet period | Recorded at once, but the finalizer needs both the confirmation and the Keycloak delete plus the whole quiet period: either order ends the same way (tested with a failing Keycloak). |
+| A confirmation commits while the finalizer is deciding | The finalizer may not see it yet and finalizes a tick later; it can never see a confirmation that is not there, because a confirmed row never becomes pending again. |
 | First requests of a new user in parallel | `INSERT ... ON CONFLICT DO NOTHING`: one `UserRegistered`. |
 | A token still valid after promotion | user-service answers 410 from its own database. Other services rely on their tombstone, and the final sweep and quiet period cover requests in flight. |
 | Configuration changed while deletions are in flight | Deadlines are absolute; the participant set is snapshotted at promotion. |
@@ -415,8 +432,8 @@ The price of the last option comes from one requirement, that the email cannot c
 | What fails | Effect | Recovery |
 |---|---|---|
 | Kafka down | Events wait in the outbox. Nothing is lost; `outbox.oldest.pending.age` alerts. | Relay drains in order when Kafka returns. |
-| Keycloak down | Requests unaffected (the row is already committed). Hard deletes wait; the circuit opens. | The job retries; the finaliser waits for `keycloak_deleted_at`. |
-| A participant down | Its confirmation does not arrive; finalisation stalls for the affected users. | Pending-ack gauge names it; fix the service, or waive it by migration if retired. |
+| Keycloak down | Requests unaffected (the row is already committed). Hard deletes wait; the circuit opens. | The job retries; the finalizer waits for `keycloak_deleted_at`. |
+| A participant down | Its confirmation does not arrive; finalization stalls for the affected users. | Pending-ack gauge names it; fix the service, or waive it by migration if retired. |
 | A poison event in a consumer | The record goes to the dead-letter topic; the participant never confirms. | Dead-letter alert; fix and replay (the cleanup is idempotent). |
 | Database error inside a job | The transaction rolls back; the row is untouched. | Next tick. |
 | An instance dies mid-job | Same: a transaction either commits or does not. | Another instance, or the next tick. |
@@ -452,12 +469,14 @@ The price of the last option comes from one requirement, that the email cannot c
 | Property (proposed names) | Meaning | Development | Production |
 |---|---|---|---|
 | `app.user.deletion.grace` | Time between request and irreversibility | 5 minutes or less | 14–30 days; never 0 (validated at startup) |
-| `app.user.deletion.quiet-period` | Wait after the Keycloak delete before finalising | 1 minute | 10 minutes |
+| `app.user.deletion.quiet-period` | Wait after the Keycloak delete before finalizing | 1 minute | 10 minutes; zero allowed, negative refused at start |
 | `app.user.deletion.required-participants` | Services that must confirm each new deletion | empty until they exist | every service storing per-user data |
-| `app.user.deletion.promoter.interval-ms` / `.batch-size` and `app.user.deletion.keycloak.interval-ms` / `.batch-size` (implemented); `.finaliser.*` (planned) | Interval and batch size of each job; each does one batch per tick | a few seconds | tens of seconds |
+| `app.user.deletion.promoter.*`, `app.user.deletion.keycloak.*`, `app.user.deletion.finalizer.*` (`interval-ms`, `batch-size`) | Interval and batch size of each job; each does one batch per tick | a few seconds | tens of seconds |
+| `app.user.deletion.ack-consumer.enabled` | Whether the listener for the participants' confirmations starts (`spring.kafka.consumer.*` and `spring.kafka.listener.*` configure it: group `user-service`, strings, no auto-commit, start from the beginning, one acknowledgement per record, every other setting that matters written down) | true | true |
+| `app.processed-events.purge.*` | Retention (30 days), batch size and cron of the daily purge of `processed_events` | | |
 | `app.keycloak.admin.*` (implemented) | `base-url`, `realm`, `client-id`, `client-secret` (from `USER_SERVICE_ADMIN_CLIENT_SECRET`), `connect-timeout`, `read-timeout`, `token-refresh-margin`, `retry.max-attempts` / `.wait`, `circuit-breaker.sliding-window-size` / `.minimum-calls` / `.failure-rate-threshold` / `.wait-in-open-state` / `.half-open-calls` | local container | real realm, `http://keycloak:8080` inside the compose network |
 
-The scheduler pool (`spring.task.scheduling.pool.size`) needs at least as many threads as jobs that can be busy at once: the relay, the promoter, the Keycloak job and the finaliser (plus the daily outbox purge); it is 6 today.
+The scheduler pool (`spring.task.scheduling.pool.size`) needs at least as many threads as jobs that can be busy at once: the relay, the promoter, the Keycloak job and the finalizer (plus the daily outbox purge); it is 6 today (the second daily purge, of `processed_events`, is short and shares the pool).
 
 ## 15. What has been verified, and what has not
 
@@ -497,7 +516,11 @@ The saga's code is in user-service's `deletion` package (scheduling, promotion, 
 - **Keycloak admin client**: `KeycloakAdminRestClientTest` runs the real client against WireMock (a fake clock for token expiry, short timeouts, no Docker): token request and bearer header, caching, renewal at expiry minus the margin, 401 renewal, wrong secret, 404, 5xx, 403, slow, connection reset, garbage, nothing listening, no response body in any message, the breaker opening, refusing without sending, half-open probes, a 404 never opening it. `KeycloakAdminConfigTest`; `KeycloakAdminClientIT` runs the real client against the real image and realm file.
 - **Hard-delete job and orphan collision**: `KeycloakDeletionJobTest`, `KeycloakDeletionServiceTest`, `OrphanEmailServiceTest`, `GlobalExceptionHandlerTest` and `ProvisioningInterceptorWiringTest` (statuses and `Retry-After`); `ScriptedKeycloakAdmin` (`testsupport/keycloak/`) is a `KeycloakAdmin` whose answers a test writes in advance, used by `KeycloakDeletionIT` (no transaction during the call, proven with the transaction state seen from inside the call; recovery after a crash between call and stamp; two instances inside Keycloak at the same moment) and `OrphanEmailServiceIT` (the chain to a free address); `KeycloakDeletionFlowIT` and `OrphanEmailFlowIT` are full-context tests over HTTP with the real scheduler and a WireMock Keycloak, including Keycloak down and then back.
 
-Practice: every test above was mutation-checked (the code it guards was broken, the test confirmed to fail, the file restored byte for byte). Full-context tests that run a fast scheduler close their context after the class (`@DirtiesContext(AFTER_CLASS)`), and the ones that must not run a job set its interval to a day (`app.user.deletion.promoter.interval-ms`, `app.user.deletion.keycloak.interval-ms`, the relay's): a cached context keeps its jobs ticking against the shared database and would promote the next class's seeded rows.
+- **Participant confirmations**: `EventEnvelopeReaderTest` (every refusal is a poison exception and none quotes the message), `ParticipantAckListenerTest` (the contract fixture is the message: which records are confirmations, which are ignored, which are poison, what is counted), `ParticipantAckServiceTest`, `ParticipantAcksTest`, `RequiredParticipantsValidatorTest` (also through a real start-up: a typo fails the start), `KafkaConsumerConfigTest`; `ParticipantAckServiceIT` (what the claim and the row do together: the waived row, the other participant, the other user, the same event for two participants), `ParticipantAckAtomicityIT` (real commits: a failure after the claim rolls the claim back with the ack and the retry applies it, two copies at once are applied once, a claim outside a transaction is refused), `ProcessedEventsIT`; `ParticipantAckConsumerIT` against a real broker and Postgres with messages produced by hand (a confirmation is applied, a copy of it is applied once, a confirmation nobody waits for and an unknown event type are ignored, three kinds of poison land unchanged on `device.events.v1.dlt` with the reason in the headers and are each read once while the records behind them are still applied, a database that fails four times, more than any other failure is retried, is waited out and the record is applied and never dead-lettered).
+- **Finalizer and gauges**: `DeletionFinalizationServiceTest`, `DeletionFinalizationJobTest`, `DeletionFinalizationIT` (the work list and the claim: participants pending, confirmed, waived and mixed, the quiet period exact at the boundary, a Keycloak user not yet deleted, every other status, order and limit, twice finalizes once, the event built from the row), `DeletionMetricsTest` and `DeletionMetricsIT` (the gauges against real rows), `ParticipantAckMetricsTest`, `ProcessedEventsPurgeJobTest`.
+- **The whole saga** (`DeletionSagaFlowSupport` and two classes; HTTP through the real security chain, Spring's scheduler firing every real job, the admin client talking to WireMock): `DeletionSagaNoParticipantsFlowIT` (no participants: from `DELETE /me` to `DELETED` by time alone, after the Keycloak delete and the whole quiet period, the four events in order with rising versions, the finalized event carrying the row's `deleted_at`, 410 afterwards; Keycloak failing holds the account at `DELETING` and it finishes by itself when Keycloak is back) and `DeletionSagaDevicesFlowIT` (also a real Kafka broker with the relay running: with `devices` required the account waits for the confirmation however long the quiet period is; the test plays device-service by reading `UserDeletionStarted` from `user.events.v1` and answering with the contract fixture, whose `causationId` is that event; the account is `DELETED` right after and the four events are on the topic in order; a confirmation that arrives while Keycloak is unreachable is recorded at once but the account still waits for the Keycloak delete and the quiet period that follows it).
+
+Practice: every test above was mutation-checked (the code it guards was broken, the test confirmed to fail, the file restored byte for byte). Full-context tests that run a fast scheduler close their context after the class (`@DirtiesContext(AFTER_CLASS)`), and the ones that must not run a job set its interval to a day (`app.user.deletion.promoter.interval-ms`, `app.user.deletion.keycloak.interval-ms`, the relay's; the finalizer's is a day in `src/test/resources/application.properties`, where the confirmation listener is also switched off): a cached context keeps its jobs ticking against the shared database and would promote or finalize the next class's seeded rows. A test that starts the application with a participant in `required-participants` must name one that has a handler (today `devices`), or the start-up check refuses to start it. The finalizer, the confirmation consumer and the gauges were checked with 30 deliberate breakages, each caught by a test: a schema version or event type not checked, the user id not taken from the aggregate, the required set not validated, a negative quiet period accepted, the finalized event not written, the quiet period ignored, the participant, status and quiet-period conditions of the finalizing `UPDATE` and of its work list dropped or loosened, a wrong order, a failure not counted, a finalization result inverted, the purge not looping, the purge boundary, the confirmation's `waived_at` and `acked_at` guards, the claim ignoring a duplicate, the claim no longer mandatory in a transaction, the ack service not transactional, the database policy not recognised, poison retried, a database failure not retried, the wrong event type registered, and each gauge reading the wrong rows.
 
 ## 17. Roadmap
 
@@ -511,7 +534,7 @@ Each step lands with its tests and an update of this document.
 | 5d | Provisioning: no email sync, the mismatch counter | done |
 | 5e | Promoter | done |
 | 5f | Keycloak admin client, hard-delete job, orphan email collision | done |
-| 5g | `device.events.v1` and its `UserDevicesDeleted` event with a fixture in `contracts`; the ack consumer and handler registry with start-up validation of the required set; the topic and its dead-letter topic in `kafka-topics.sh` and the `.dlt` resolver; the finaliser and `UserDeletionFinalized` (with fixture); the watchdog gauges (scheduled count, age of the oldest `DELETING` row, age of the oldest pending Keycloak delete, pending acks per participant, circuit state); consumer tests with hand-crafted messages; an end-to-end run with an empty required set, then with `devices` required and a hand-produced `UserDevicesDeleted` | next |
-| 5h | Concurrency and failure tests: two finalisers, the races in section 11 not yet covered, Keycloak down during promotion; README and this document brought up to date | after 5g |
+| 5g | The `device.events.v1` contract in `contracts` (`DeviceEvents`, `DeviceEventType`, `UserDevicesUnclaimed` with its data record and fixture); the participant-ack consumer (`ParticipantAckListener`, `ParticipantAckService`, the registry `ParticipantAcks` and its start-up validation) with the shared consumer pieces in `consumer` (`EventEnvelopeReader`, `ProcessedEvents` with its purge job, the error handler with `<topic>.dlt` and the retry policy); the topic and its dead-letter topic in `kafka-topics.sh`; the finalizer and `UserDeletionFinalized`; the watchdog gauges; the consumer tests and the whole-saga tests, first with an empty required set, then with `devices` required and a hand-produced confirmation | done |
+| 5h | Concurrency and failure tests that have none yet: two finalizers racing for one account and for one backlog (staged like the promoter's), a confirmation committing while the finalizer decides, the races of section 11 not yet covered (two simultaneous `DELETE`s, a `PATCH` racing a schedule), Keycloak down during promotion, Kafka down while the saga's events wait in the outbox; README and this document brought up to date | next |
 
 Not part of the saga, planned separately (`docs/open/03-roadmap.md`): the email change (section 10.4), admin write endpoints, a recent-login check on `DELETE /me`, retention for personal data in `user.events.v1`, a reconcile of diverged emails and of orphaned accounts (section 13).
