@@ -1,8 +1,10 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.testsupport.LocalJwks;
-import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
-import com.cagritasoz.user_service.testsupport.TestTokens;
+import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.testsupport.web.Route;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -31,6 +33,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = {
         "app.outbox.relay.interval-ms=86400000",
+        "app.user.deletion.promoter.interval-ms=86400000",
+        "app.user.deletion.keycloak.interval-ms=86400000",
+        "app.keycloak.admin.client-secret=test-secret",
         "app.outbox.purge.cron=-"
 })
 @AutoConfigureMockMvc
@@ -45,7 +50,7 @@ class SecurityFlowIT {
 
     @DynamicPropertySource
     static void sharedJwks(DynamicPropertyRegistry registry) {
-        registry.add(SecuritySliceTest.JWK_SET_URI_PROPERTY, LocalJwks.SHARED::url);
+        registry.add(LocalJwks.JWK_SET_URI_PROPERTY, LocalJwks.SHARED::url);
     }
 
     @Autowired
@@ -54,9 +59,12 @@ class SecurityFlowIT {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     @BeforeEach
     void emptyTables() {
-        jdbc.execute("TRUNCATE TABLE outbox_events, users RESTART IDENTITY CASCADE");
+        jdbc.execute("TRUNCATE TABLE outbox_events, user_deletion_participants, users RESTART IDENTITY CASCADE");
     }
 
     static Stream<Route> customerRoutes() {
@@ -73,6 +81,10 @@ class SecurityFlowIT {
             request.header(HttpHeaders.AUTHORIZATION, bearer);
         }
         return mockMvc.perform(request);
+    }
+
+    private double mismatchCount() {
+        return meterRegistry.get("user.email.token.mismatch").counter().count();
     }
 
     private Integer userRows() {
@@ -111,26 +123,38 @@ class SecurityFlowIT {
         assertThat(outboxEventTypes()).containsExactly("UserRegistered");
     }
 
+    // A token is a copy of Keycloak's state up to 5 minutes old, so its email is read to create the row and never
+    // written into it afterwards: the request still succeeds, the row keeps its email, no event is written, and the
+    // divergence is counted.
     @Test
-    void changedVerifiedEmailInTheToken_updatesTheRowAndEmitsUserUpdated() throws Exception {
+    void changedVerifiedEmailInTheToken_isNotWritten_butCounted() throws Exception {
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isOk());
+        double before = mismatchCount();
 
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).claim("email", "new.address@example.com").bearer())
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.email").value("new.address@example.com"));
+                .andExpect(jsonPath("$.email").value("arthur.morgan@example.com"));
 
-        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserUpdated");
+        assertThat(mismatchCount()).isEqualTo(before + 1);
+        assertThat(jdbc.queryForObject("SELECT email FROM users WHERE id = ?", String.class, CUSTOMER_ID))
+                .isEqualTo("arthur.morgan@example.com");
+        assertThat(outboxEventTypes()).containsExactly("UserRegistered");
     }
 
+    // An unverified claim says nothing about the account, and Keycloak's lower-casing is no divergence.
     @Test
-    void changedButUnverifiedEmailInTheToken_isIgnored() throws Exception {
+    void unverifiedOrDifferentlyCasedEmailInTheToken_isNotCounted() throws Exception {
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isOk());
+        double before = mismatchCount();
 
         call(Route.ME_GET, TestTokens.user(CUSTOMER_ID)
                 .claim("email", "new.address@example.com").claim("email_verified", false).bearer())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("arthur.morgan@example.com"));
+        call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).claim("email", "ARTHUR.MORGAN@EXAMPLE.COM").bearer())
+                .andExpect(status().isOk());
 
+        assertThat(mismatchCount()).isEqualTo(before);
         assertThat(outboxEventTypes()).containsExactly("UserRegistered");
     }
 
@@ -224,20 +248,45 @@ class SecurityFlowIT {
         assertNothingWasWritten();
     }
 
+    // The grace period: the account stays readable, writes are refused, a repeat of the request changes nothing.
+    // Every route of every status is covered by DeletionStatusMatrixIT; this is the end-to-end happy path.
     @Test
-    void deletion_blocksEveryCustomerRouteWithAStillValidToken() throws Exception {
+    void deletion_scheduling_keepsTheAccountReadableButReadOnly() throws Exception {
         String bearer = TestTokens.user(CUSTOMER_ID).bearer();
         call(Route.ME_GET, bearer).andExpect(status().isOk());
 
+        call(Route.ME_DELETE, bearer)
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"))
+                .andExpect(jsonPath("$.deletionScheduledFor").isNotEmpty());
+
+        call(Route.ME_GET, bearer)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"));
+        call(Route.ME_PATCH, bearer)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/deletion-scheduled"));
         call(Route.ME_DELETE, bearer).andExpect(status().isAccepted());
 
-        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionRequested");
+        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionScheduled");
+    }
+
+    // Once the promoter has started the deletion (simulated here by moving the row to DELETING, as the promoter
+    // will) every customer route answers 410 with a token that is still valid: the status comes from the database.
+    @Test
+    void deletion_afterTheCleanupStarted_blocksEveryCustomerRouteWithAStillValidToken() throws Exception {
+        String bearer = TestTokens.user(CUSTOMER_ID).bearer();
+        call(Route.ME_GET, bearer).andExpect(status().isOk());
+        call(Route.ME_DELETE, bearer).andExpect(status().isAccepted());
+        jdbc.update("UPDATE users SET status = 'DELETING', deletion_started_at = CURRENT_TIMESTAMP, version = version + 1 WHERE id = ?",
+                CUSTOMER_ID);
+
         for (Route route : Route.CUSTOMER) {
             call(route, bearer)
                     .andExpect(status().isGone())
                     .andExpect(jsonPath("$.type").value("https://home-energy-tracker/problems/account-deleted"));
         }
-        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionRequested");
+        assertThat(outboxEventTypes()).containsExactly("UserRegistered", "UserDeletionScheduled");
     }
 
     @Test
@@ -248,14 +297,40 @@ class SecurityFlowIT {
         mockMvc.perform(get("/api/v1/admin/users/" + CUSTOMER_ID)
                         .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("DELETING"));
+                .andExpect(jsonPath("$.status").value("DELETION_SCHEDULED"))
+                .andExpect(jsonPath("$.participants").isEmpty());
+    }
+
+    // The admin view shows which services a deletion still waits for. The rows are written by hand here (the promoter
+    // that normally writes them arrives in a later step).
+    @Test
+    void adminView_listsTheParticipantsOfADeletion() throws Exception {
+        call(Route.ME_GET, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isOk());
+        call(Route.ME_DELETE, TestTokens.user(CUSTOMER_ID).bearer()).andExpect(status().isAccepted());
+        jdbc.update("INSERT INTO user_deletion_participants (user_id, participant, acked_at) VALUES (?, 'devices', CURRENT_TIMESTAMP)", CUSTOMER_ID);
+        jdbc.update("INSERT INTO user_deletion_participants (user_id, participant) VALUES (?, 'alerts')", CUSTOMER_ID);
+
+        mockMvc.perform(get("/api/v1/admin/users/" + CUSTOMER_ID)
+                        .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.participants[0].participant").value("alerts"))
+                .andExpect(jsonPath("$.participants[0].ackedAt").value((Object) null))
+                .andExpect(jsonPath("$.participants[1].participant").value("devices"))
+                .andExpect(jsonPath("$.participants[1].ackedAt").isNotEmpty());
+
+        mockMvc.perform(get("/api/v1/admin/users")
+                        .header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].participants.length()").value(2));
     }
 
     @Test
     void deletedAccount_isGoneEvenWithAFreshValidToken() throws Exception {
         jdbc.update("""
-                INSERT INTO users (id, email, display_name, status, deletion_requested_at, deleted_at)
-                VALUES (?, 'deleted+1@invalid', 'Deleted user', 'DELETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO users (id, email, display_name, status, deletion_requested_at, deletion_scheduled_for,
+                                   deletion_started_at, deleted_at)
+                VALUES (?, 'deleted+1@invalid', 'Deleted user', 'DELETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """, OTHER_CUSTOMER_ID);
 
         call(Route.ME_GET, TestTokens.user(OTHER_CUSTOMER_ID).bearer()).andExpect(status().isGone());

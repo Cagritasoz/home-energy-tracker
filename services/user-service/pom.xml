@@ -89,6 +89,18 @@
             <artifactId>spring-boot-starter-aspectj</artifactId>
         </dependency>
 
+		<!-- Used programmatically (CircuitBreaker.of / Retry.of), not through annotations, by the Keycloak admin client.
+		     Versions come from the Resilience4j BOM in the root pom. -->
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-circuitbreaker</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-retry</artifactId>
+		</dependency>
+
 		<!-- Resource-server side of OAuth2/OIDC only - validates JWTs against Keycloak's JWKS, never
 		     issues tokens or owns credentials itself. Boot 4.1.1 ships this artifact under two
 		     names; spring-boot-starter-oauth2-resource-server (no "security-") still resolves but
@@ -158,6 +170,13 @@
 			     is drained"). Boot 4's starter-test no longer brings it; the version comes from Boot's BOM. -->
 			<groupId>org.awaitility</groupId>
 			<artifactId>awaitility</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<!-- Fakes Keycloak's HTTP API in the tests of the admin client and of the jobs that use it. -->
+			<groupId>org.wiremock</groupId>
+			<artifactId>wiremock-standalone</artifactId>
 			<scope>test</scope>
 		</dependency>
 

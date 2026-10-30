@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.testsupport.LocalJwks;
-import com.cagritasoz.user_service.testsupport.TestTokens;
+import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,7 +38,7 @@ class JwksUnavailableTest {
     @DynamicPropertySource
     static void jwks(DynamicPropertyRegistry registry) {
         JWKS.resetRequestCount();
-        registry.add(SecuritySliceTest.JWK_SET_URI_PROPERTY, JWKS::url);
+        registry.add(LocalJwks.JWK_SET_URI_PROPERTY, JWKS::url);
     }
 
     @Autowired

@@ -18,7 +18,7 @@ Smart meters and plugs report how much energy they have used. This system ingest
 
 | Service | Purpose | Port | Status |
 |---|---|---|---|
-| **user-service** | User accounts, profile, GDPR-style account deletion, user events | 8081 | **Implemented**, see below. Account deletion is partly done |
+| **user-service** | User accounts, profile, GDPR-style account deletion, user events | 8081 | **Implemented**, see below. Account deletion is complete on this side; no participant service exists yet |
 | device-service | Device registry, per-device tokens, device events | 8081 | Prototype exists, **to be rebuilt next** |
 | ingestion-service | Receives readings from devices and publishes them to Kafka | 8082 | Prototype exists, to be rebuilt |
 | usage-service | Turns readings into consumption data in InfluxDB | 8083 | Prototype exists, to be rebuilt |
@@ -38,21 +38,22 @@ The owner of "who is this user". It is the only service that talks to the identi
 ### What it does
 
 - **Identity comes from Keycloak.** There is no sign-up or password code here. The service is an OAuth2 resource server and validates the JWT: issuer, audience (`aud` must contain `user-service`) and realm roles (`user`, `admin`).
-- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. A verified email change in Keycloak is picked up on the next request and emits `UserUpdated`.
+- **Just-in-time provisioning.** The first request from a customer (role `user`) creates their row, with the JWT `sub` as the primary key, and emits `UserRegistered`. This is race-safe (`INSERT ... ON CONFLICT DO NOTHING`). If two requests race, only the winner emits the event. The token's email is only read to create the row: a verified token email that differs from the stored one is counted (`user.email.token.mismatch`) and never written back, because a token is a copy of Keycloak's state up to 5 minutes old. If the new account's address belongs to another account, Keycloak is asked whether that account still exists: if not (an operator deleted its user by hand) the old account is scheduled for immediate deletion and the request is answered `503` with `Retry-After`, so the retry succeeds once the address is freed; if it does exist the answer is `409`; if Keycloak cannot answer it is `503`.
 - **Self-service API.** View and update your profile, request deletion of your account.
 - **Admin API.** Paged read-only listing of users, for staff accounts (role `admin`). An admin is an identity in Keycloak only: admins have no row in the `users` table and cause no events, and calling the customer API with an admin token returns `403`.
-- **Account deletion** is a multi-service saga (choreography, no central orchestrator). `DELETE /me` moves the account to `DELETING` and emits `UserDeletionRequested`. The remaining steps (Keycloak disable and delete, device cleanup, scrubbing personal data) are not implemented yet. Any account that is not `ACTIVE` gets `410 Gone` on every endpoint.
+- **Account deletion** is a multi-service saga (choreography, no central orchestrator) with a grace period. `DELETE /me` moves the account to `DELETION_SCHEDULED` and emits `UserDeletionScheduled`: for the configured grace (`app.user.deletion.grace`) the account stays readable but read-only, and `POST /me/deletion/cancel` brings it back to `ACTIVE`. After the deadline a background promoter scrubs the account's personal data and moves it to `DELETING` (announced by `UserDeletionStarted`); a job then deletes the account's Keycloak user (idempotent, retried until Keycloak answers, behind a circuit breaker) and, once every participant service that is required for the deletion has confirmed its cleanup (with an event of its own, read by a consumer in user-service; none is required yet, so today a deletion completes by time alone) and a quiet period after the Keycloak delete has passed, the finalizer takes it on to `DELETED` (announced by `UserDeletionFinalized`). A `DELETING` or `DELETED` account gets `410 Gone` on every endpoint.
 - **Errors are RFC 9457 problem details**, with a stable `type`, `status`, `detail`, `instance` and `timestamp`. That includes 401 and 403 responses from the security layer.
 
 ### API
 
 | Method | Path | Role | What |
 |---|---|---|---|
-| `GET` | `/api/v1/users/me` | `user` | Own profile. Creates the account on first call. |
-| `PATCH` | `/api/v1/users/me` | `user` | Update `displayName` (≤ 100 chars) and/or `timezone` (a valid Java zone id like `Europe/Istanbul`). Optimistic locking returns `409` on a conflicting edit. |
-| `DELETE` | `/api/v1/users/me` | `user` | Start account deletion. Returns `202`, idempotent. |
+| `GET` | `/api/v1/users/me` | `user` | Own profile and `status` (`ACTIVE` or `DELETION_SCHEDULED` with `deletionScheduledFor`). Creates the account on first call. |
+| `PATCH` | `/api/v1/users/me` | `user` | Update `displayName` (≤ 100 chars) and/or `timezone` (a valid Java zone id like `Europe/Istanbul`). Concurrent edits are serialized (the second applies on top of the first); `409 deletion-scheduled` while a deletion is scheduled. |
+| `DELETE` | `/api/v1/users/me` | `user` | Schedule account deletion after the grace period. Returns `202` with the account and its `deletionScheduledFor`; idempotent. |
+| `POST` | `/api/v1/users/me/deletion/cancel` | `user` | Cancel a scheduled deletion. `204`; `409 deletion-deadline-passed` once the deadline has passed. |
 | `GET` | `/api/v1/admin/users` | `admin` | Paged list (`page`, `size` ≤ 100). |
-| `GET` | `/api/v1/admin/users/{id}` | `admin` | One user, including lifecycle fields. |
+| `GET` | `/api/v1/admin/users/{id}` | `admin` | One user, including lifecycle fields and the services a deletion waits for (`participants`). |
 | `GET` | `/actuator/health` | public | Health. |
 
 A user can only ever reach their own row: identity comes from the token's `sub`, never from the URL or the body.
@@ -64,19 +65,25 @@ Topic `user.events.v1`, keyed by user id, JSON envelope defined in the shared [`
 | Event | When |
 |---|---|
 | `UserRegistered` | First time a user is seen |
-| `UserUpdated` | Profile or verified email changed |
-| `UserDeletionRequested` | `DELETE /me` accepted |
+| `UserUpdated` | Profile changed (`PATCH /me`) |
+| `UserDeletionScheduled` | `DELETE /me` accepted (carries the deadline) |
+| `UserDeletionCancelled` | A scheduled deletion was cancelled |
+| `UserDeletionStarted` | The grace period ended and the promoter started the deletion (the account's email and name are already scrubbed) |
+| `UserDeletionFinalized` | Every required service confirmed its cleanup and the quiet period after the Keycloak delete passed (emitted by the finalizer) |
+
+user-service also **consumes** `device.events.v1`: device-service's `UserDevicesUnclaimed` confirms that it no longer holds anything personal for a deleted user. Records it cannot apply go to `device.events.v1.dlt`.
 
 ### How the reliability works
 
 The interesting parts of this service are in how it keeps its database and Kafka consistent. Both are covered by tests that run against real Postgres and Kafka containers.
 
-- **Transactional outbox.** The business change and its event are written in the *same* database transaction. A relay then publishes outbox rows to Kafka. A crash can delay an event but never lose it or emit one for a rolled-back change. Design notes: [`docs/design/01-outbox-design.md`](docs/design/01-outbox-design.md).
+- **Transactional outbox.** The business change and its event are written in the *same* database transaction. A relay then publishes outbox rows to Kafka. A crash can delay an event but never lose it or emit one for a rolled-back change. Design: [`docs/design/01-outbox-design.md`](docs/design/01-outbox-design.md); consumer side: [`docs/design/02-processed-events-design.md`](docs/design/02-processed-events-design.md).
 - **A relay that is safe to run many times.** A Postgres advisory lock lets only one instance publish at a time. Rows are sent as a pipelined batch, and only the acknowledged prefix is marked as published. If Kafka is down, the relay backs off exponentially (4 s up to 30 s) and resumes in order when it recovers. It never skips a row. Events can arrive late or twice, but not never.
 - **Operable.** Micrometer gauges for pending rows, the age of the oldest pending row (the stall alarm) and the consecutive failed ticks. Published rows are purged after 7 days.
+- **Keycloak is never called inside a database transaction.** The jobs that talk to Keycloak read their work list, call Keycloak, then write one guarded `UPDATE`: a slow or dead Keycloak holds no connection and no lock, and two instances doing the same account is harmless because the delete is idempotent. The admin client has 1 s / 3 s timeouts, one retry for transient failures, and a circuit breaker whose state is a metric.
 - **Compare-and-set state changes.** Every status change is `UPDATE ... WHERE status = '<expected>'`, and it only emits an event if a row was actually changed. Concurrent requests cannot double-emit.
 - **The database owns time.** `created_at` has a default and `updated_at` is stamped by a trigger. Event timestamps come from the row as the database stored it.
-- **Idempotent consumers** are prepared with a `processed_events` table. No consumer uses it yet, because user-service does not consume anything until the deletion saga lands.
+- **Idempotent consumers.** The consumer of the participants' confirmations claims each event in a `processed_events` table in the same transaction as its effect, so a redelivered event is applied once and a failure rolls the claim back with the effect. A message that can never be applied goes to a dead-letter topic without blocking the ones behind it; a failing database is waited out and never dead-letters anything.
 
 ---
 
@@ -95,23 +102,25 @@ cp .env.example .env          # local-only throwaway passwords; .env is gitignor
 docker compose --profile kafka up -d
 ```
 
-Compose starts three services by default: the Postgres database of user-service (`user-db`), the Postgres database of Keycloak (`keycloak-db`) and Keycloak itself, with a pre-seeded realm and two test users. `--profile kafka` adds a single-node Kafka (KRaft) with its topics, plus Kafka UI at http://localhost:8070. Wait until `docker compose ps` shows Keycloak as healthy. The first start takes a minute.
+Compose starts four services by default: the Postgres database of user-service (`user-db`), the Postgres database of Keycloak (`keycloak-db`), Keycloak itself, with a pre-seeded realm and two test users, and Mailpit, a mail catcher: every mail Keycloak sends (the verification mail of a new registration, password resets, password-changed notices) lands at http://localhost:8025 instead of being delivered. `.env` must also define `USER_SERVICE_ADMIN_CLIENT_SECRET` (copy the line from `.env.example` into an existing `.env`); Keycloak uses it for the admin client of user-service. `--profile kafka` adds a single-node Kafka (KRaft) with its topics, plus Kafka UI at http://localhost:8070. Wait until `docker compose ps` shows Keycloak as healthy. The first start takes a minute.
 
-With plain `docker compose up -d` (no profile) the service still works and serves its API, but events pile up in the outbox table until Kafka is available.
+With plain `docker compose up -d` (no profile) the service still works and serves its API, but events pile up in the outbox table until Kafka is available. The listener for the participants' confirmations keeps trying to reach Kafka and logs warnings meanwhile (`app.user.deletion.ack-consumer.enabled=false` switches it off).
 
 ### 2. Run the service
 
-`.env` is only read by Docker, so export the database password in your shell. It is the same value as in `.env`.
+`.env` is only read by Docker, so export the database password and the Keycloak admin-client secret in your shell. They are the same values as in `.env` (the secret is what lets user-service delete Keycloak users; the service does not start without it).
 
 ```powershell
 # PowerShell
 $env:USER_DB_PASSWORD = "password"
+$env:USER_SERVICE_ADMIN_CLIENT_SECRET = "<the value from .env>"
 .\mvnw.cmd -pl services/user-service -am spring-boot:run
 ```
 
 ```bash
 # bash
 export USER_DB_PASSWORD=password
+export USER_SERVICE_ADMIN_CLIENT_SECRET=<the value from .env>
 ./mvnw -pl services/user-service -am spring-boot:run
 ```
 
@@ -135,7 +144,7 @@ Invoke-RestMethod http://localhost:8081/api/v1/users/me -Headers @{ Authorizatio
 ```bash
 # any shell: ask Keycloak directly
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/energy-tracker/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=local-dev -d client_secret=secret \
+  -d grant_type=password -d client_id=energy-cli -d client_secret=secret \
   -d username=testuser@example.com -d password=Testpassword1 | jq -r .access_token)
 
 curl -s http://localhost:8081/api/v1/users/me -H "Authorization: Bearer $TOKEN"
@@ -153,6 +162,8 @@ Response of `GET /api/v1/users/me`:
   "email": "testuser@example.com",
   "displayName": "testuser",
   "timezone": "UTC",
+  "status": "ACTIVE",
+  "deletionScheduledFor": null,
   "createdAt": "2026-10-10T09:00:00Z",
   "updatedAt": "2026-10-10T09:00:00Z"
 }
@@ -191,16 +202,20 @@ Open `services/user-service/target/site/jacoco/index.html` in a browser. Package
 
 Unit tests are named `*Test` and run in Surefire. Integration tests are named `*IT`, use [Testcontainers](https://testcontainers.com) and run in Failsafe. CI (GitHub Actions) runs `./mvnw verify` on every push.
 
-user-service has more than 200 test cases. Highlights:
+user-service has more than 1,100 test cases. Highlights:
 
 - **Schema tests** that exercise every constraint, default and trigger directly against Postgres, plus a migration-upgrade test that upgrades a populated V7 database to the latest version.
 - **Native query tests** that check row counts, compare-and-set guards and optimistic-locking conflicts.
 - **Relay tests against real Postgres and Kafka**: a 120-row backlog drained in one tick, two instances competing for the advisory lock, the broker paused with `docker pause` (nothing marked as published, real cause stored, recovery in order, no payload in logs), and backoff timing checked with a fake clock.
+- **Keycloak admin client tests**: a WireMock server plays Keycloak (slow, down, connection reset, 5xx, rejected token, token expiry, circuit open and half-open), and the same client is checked against the real Keycloak image with the project's realm file. The deletion and orphan-address flows run end to end with the real scheduler.
+- **Consumer tests against a real broker**: confirmations produced by hand are applied once even when delivered twice, three kinds of poison message land unchanged on the dead-letter topic without blocking the records behind them, and a database that fails several times in a row is waited out without dead-lettering anything. A claim and its effect roll back together, proven with real commits.
+- **Races between the customer's own requests and against the saga**, with real commits: two `DELETE`s, a `PATCH` against a schedule in both orders, two `PATCH`es, two finalizers, a confirmation against the finalizer, each staged so that the second transaction is provably blocked on the first's row lock, and again through HTTP with simultaneous requests.
+- **The whole deletion saga**, from `DELETE /me` to `DELETED`: with no participants by time alone, and with a participant required, waiting for a confirmation read from and produced to a real Kafka broker, with every job fired by Spring's own scheduler; and with Keycloak unreachable or the Kafka broker paused in the middle of a deletion.
 - Tests are *mutation-checked*: a test is only trusted after the code it covers has been deliberately broken and the test has failed.
 
 - **Security tests** against the real security configuration: real RS256-signed tokens with keys served from a local JWKS endpoint, a role matrix of 14 token shapes across every route, forged, unsigned, expired and wrong-audience tokens, CORS, method security in isolation, key rotation and key-endpoint outages, and an integration test proving an admin account never gets a user row or an event. The security classes have 100 % line and branch coverage.
 
-Not written yet: concurrency tests for the deletion saga, contract fixtures and end-to-end tests (the `e2e/` module is a stub).
+Not written yet: cross-service end-to-end tests (the `e2e/` module is a stub).
 
 ---
 
@@ -209,7 +224,7 @@ Not written yet: concurrency tests for the deletion saga, contract fixtures and 
 The three prototype services (`device-service`, `ingestion-service`, `usage-service`) work end to end, but they predate the design and take shortcuts. For example, ingestion publishes per-tick deltas where a real meter reports a cumulative counter, and device ids are shared through a polled cache. They will be **rebuilt**, not extended, after user-service is complete.
 
 ### device-service (prototype, rebuild next)
-Owns devices: who has which meter, registration, and the per-device tokens that IoT hardware uses to authenticate. Publishes `device.events.v1` and a compacted `device.registry.v1` topic that ingestion uses to validate tokens without calling this service. Reacts to `UserDeletionRequested` by deleting the user's devices and answering with `UserDevicesDeleted`, which is the other half of the deletion saga.
+Owns devices: who has which meter, registration, and the per-device tokens that IoT hardware uses to authenticate. Publishes `device.events.v1` and a compacted `device.registry.v1` topic that ingestion uses to validate tokens without calling this service. Reacts to `UserDeletionStarted` by deleting the user's devices and answering with `UserDevicesUnclaimed`, which is the other half of the deletion saga.
 
 ### ingestion-service (prototype)
 The front door for IoT devices. Authenticates a device by its token (checked against the registry topic), validates the reading and publishes it to `energy.readings.v1`. Readings carry the **cumulative meter value** (`energy_total_kwh`) and the owning user id.
@@ -227,14 +242,14 @@ Consumes alert events and delivers them through a notification queue with retrie
 Natural-language insights about a user's consumption, built with Spring AI. The model gets **read-only tools** over usage data and cannot change anything.
 
 ### api-gateway (not yet implemented)
-Spring Cloud Gateway in front of everything: routing, JWT validation, rate limiting. It replaces the dev-only `local-dev` Keycloak client with proper `energy-ui` and `energy-cli` clients.
+Spring Cloud Gateway in front of everything: routing, JWT validation, rate limiting. It sits in front of the dev-only `energy-cli` Keycloak client with a proper UI client.
 
 ---
 
 ## Repository layout
 
 ```
-contracts/            Shared event contracts (envelope, headers, user events). Plain jar, no Spring.
+contracts/            Shared event contracts (envelope, headers, user and device events). Plain jar, no Spring.
 services/
   user-service/       The finished reference service
   device-service/     Prototype
@@ -242,7 +257,8 @@ services/
   usage-service/      Prototype
 infra/                docker-compose.yml, Keycloak realm, Kafka topic script
 scripts/              get-token.ps1: a dev access token from Keycloak
-docs/design/          Design notes (outbox, processed-events)
+docs/open/            General documents: overview, status, roadmap, conventions, testing, decisions, gaps
+docs/design/          One design document per feature (outbox, processed-events, account-deletion saga)
 e2e/                  End-to-end test module (stub)
 .github/workflows/    CI
 ```
@@ -260,6 +276,6 @@ It is a single Maven reactor: the root `pom.xml` aggregates every module and man
 | Identity | Keycloak 26 |
 | Time series | InfluxDB 3 Core (usage-service) |
 | Observability | Spring Actuator, Micrometer |
-| Resilience | Resilience4j (planned for the Keycloak admin client) |
+| Resilience | Resilience4j (circuit breaker and retry in the Keycloak admin client) |
 | Testing | JUnit 5, Mockito, Testcontainers, Awaitility |
 | Build / CI | Maven multi-module, GitHub Actions, Docker Compose |

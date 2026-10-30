@@ -1,17 +1,20 @@
 package com.cagritasoz.user_service.contract;
 
-import com.cagritasoz.contracts.user.UserDeletionRequestedData;
+import com.cagritasoz.contracts.user.UserDeletionCancelledData;
+import com.cagritasoz.contracts.user.UserDeletionFinalizedData;
+import com.cagritasoz.contracts.user.UserDeletionScheduledData;
+import com.cagritasoz.contracts.user.UserDeletionStartedData;
 import com.cagritasoz.contracts.user.UserEventType;
 import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.contracts.user.UserRegisteredData;
 import com.cagritasoz.contracts.user.UserUpdatedData;
-import com.cagritasoz.user_service.entity.OutboxEvent;
-import com.cagritasoz.user_service.entity.User;
-import com.cagritasoz.user_service.model.UserStatus;
-import com.cagritasoz.user_service.repository.OutboxRepository;
-import com.cagritasoz.user_service.service.OutboxService;
-import com.cagritasoz.user_service.testsupport.ContractFixtures;
-import com.cagritasoz.user_service.testsupport.UserFixtures;
+import com.cagritasoz.user_service.outbox.OutboxEvent;
+import com.cagritasoz.user_service.outbox.OutboxRepository;
+import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.data.ContractFixtures;
+import com.cagritasoz.user_service.testsupport.data.UserFixtures;
+import com.cagritasoz.user_service.user.User;
+import com.cagritasoz.user_service.user.UserStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -32,8 +35,12 @@ class UserEventContractTest {
 
     private static final UUID USER_ID = UUID.fromString("6f9619ff-8b86-4d11-b42d-00c04fc964ff");
     private static final Instant CREATED_AT = Instant.parse("2026-01-01T00:00:00Z");
-    private static final Instant DELETION_REQUESTED_AT = Instant.parse("2026-01-31T23:58:42Z");
     private static final Instant UPDATED_AT = Instant.parse("2026-02-01T00:00:05Z");
+    private static final Instant DELETION_REQUESTED_AT = Instant.parse("2026-01-31T23:50:00Z");
+    private static final Instant DELETION_SCHEDULED_FOR = Instant.parse("2026-02-14T23:50:00Z");
+    private static final Instant CANCELLED_AT = Instant.parse("2026-02-01T08:15:30Z");
+    private static final Instant DELETION_STARTED_AT = Instant.parse("2026-02-14T23:50:07Z");
+    private static final Instant DELETED_AT = Instant.parse("2026-02-15T00:01:09Z");
 
     private final ObjectMapper objectMapper = JsonMapper.builder().build();
 
@@ -77,20 +84,74 @@ class UserEventContractTest {
     }
 
     @Test
-    void recordUserDeletionRequested_payloadEqualsTheFixture() {
+    void recordUserDeletionScheduled_payloadEqualsTheFixture() {
+
+        User user = UserFixtures.activeUser()
+                .id(USER_ID)
+                .status(UserStatus.DELETION_SCHEDULED)
+                .version(1L)
+                .createdAt(CREATED_AT)
+                .deletionRequestedAt(DELETION_REQUESTED_AT)
+                .deletionScheduledFor(DELETION_SCHEDULED_FOR)
+                .updatedAt(DELETION_REQUESTED_AT)
+                .build();
+
+        outboxService.recordUserDeletionScheduled(user);
+
+        assertPayloadEqualsFixture(UserEventType.USER_DELETION_SCHEDULED);
+
+    }
+
+    @Test
+    void recordUserDeletionCancelled_payloadEqualsTheFixture() {
+
+        User user = UserFixtures.activeUser()
+                .id(USER_ID)
+                .version(2L)
+                .createdAt(CREATED_AT)
+                .updatedAt(CANCELLED_AT)
+                .build();
+
+        outboxService.recordUserDeletionCancelled(user);
+
+        assertPayloadEqualsFixture(UserEventType.USER_DELETION_CANCELLED);
+
+    }
+
+    @Test
+    void recordUserDeletionStarted_payloadEqualsTheFixture() {
 
         User user = UserFixtures.activeUser()
                 .id(USER_ID)
                 .status(UserStatus.DELETING)
-                .version(1L)
+                .version(2L)
                 .createdAt(CREATED_AT)
                 .deletionRequestedAt(DELETION_REQUESTED_AT)
-                .updatedAt(DELETION_REQUESTED_AT)
+                .deletionScheduledFor(DELETION_SCHEDULED_FOR)
+                .deletionStartedAt(DELETION_STARTED_AT)
+                .updatedAt(DELETION_STARTED_AT)
                 .build();
 
-        outboxService.recordUserDeletionRequested(user);
+        outboxService.recordUserDeletionStarted(user);
 
-        assertPayloadEqualsFixture(UserEventType.USER_DELETION_REQUESTED);
+        assertPayloadEqualsFixture(UserEventType.USER_DELETION_STARTED);
+
+    }
+
+    @Test
+    void recordUserDeletionFinalized_payloadEqualsTheFixture() {
+
+        User user = UserFixtures.deletedUser()
+                .id(USER_ID)
+                .version(3L)
+                .createdAt(CREATED_AT)
+                .deletedAt(DELETED_AT)
+                .updatedAt(DELETED_AT)
+                .build();
+
+        outboxService.recordUserDeletionFinalized(user);
+
+        assertPayloadEqualsFixture(UserEventType.USER_DELETION_FINALIZED);
 
     }
 
@@ -130,7 +191,10 @@ class UserEventContractTest {
         return switch (eventType) {
             case USER_REGISTERED -> UserRegisteredData.SCHEMA_VERSION;
             case USER_UPDATED -> UserUpdatedData.SCHEMA_VERSION;
-            case USER_DELETION_REQUESTED -> UserDeletionRequestedData.SCHEMA_VERSION;
+            case USER_DELETION_SCHEDULED -> UserDeletionScheduledData.SCHEMA_VERSION;
+            case USER_DELETION_CANCELLED -> UserDeletionCancelledData.SCHEMA_VERSION;
+            case USER_DELETION_STARTED -> UserDeletionStartedData.SCHEMA_VERSION;
+            case USER_DELETION_FINALIZED -> UserDeletionFinalizedData.SCHEMA_VERSION;
         };
 
     }

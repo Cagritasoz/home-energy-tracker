@@ -1,6 +1,6 @@
 package com.cagritasoz.user_service.schema;
 
-import com.cagritasoz.user_service.testsupport.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -63,7 +63,7 @@ class ProcessedEventSchemaIT {
         UUID eventId = UUID.randomUUID();
         String sql = """
                 INSERT INTO processed_events (event_id, handler, event_type, aggregate_id)
-                VALUES (?, ?, 'UserDevicesDeleted', ?)
+                VALUES (?, ?, 'UserDevicesUnclaimed', ?)
                 ON CONFLICT DO NOTHING
                 """;
 
@@ -112,7 +112,7 @@ class ProcessedEventSchemaIT {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("event_id", UUID.randomUUID());
         row.put("handler", HANDLER);
-        row.put("event_type", "UserDevicesDeleted");
+        row.put("event_type", "UserDevicesUnclaimed");
         row.put("aggregate_id", UUID.randomUUID().toString());
         row.putAll(overrides);
 

@@ -6,8 +6,10 @@ public enum UserEventType {
 
     USER_REGISTERED("UserRegistered"),
     USER_UPDATED("UserUpdated"),
-    // Emitted when the account moves ACTIVE -> DELETING; not "the user is DELETED".
-    USER_DELETION_REQUESTED("UserDeletionRequested");
+    USER_DELETION_SCHEDULED("UserDeletionScheduled"),
+    USER_DELETION_CANCELLED("UserDeletionCancelled"),
+    USER_DELETION_STARTED("UserDeletionStarted"),
+    USER_DELETION_FINALIZED("UserDeletionFinalized");
 
     private final String value;
 

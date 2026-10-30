@@ -10,6 +10,8 @@
   "registrationEmailAsUsername": true,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
+  "verifyEmail": true,
+  "resetPasswordAllowed": true,
   "editUsernameAllowed": false,
   "rememberMe": true,
 
@@ -31,6 +33,23 @@
   "offlineSessionIdleTimeout": 2592000,
   "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
+
+  "eventsEnabled": true,
+  "eventsExpiration": 604800,
+  "eventsListeners": ["jboss-logging", "email"],
+  "enabledEventTypes": ["LOGIN", "LOGIN_ERROR", "LOGOUT", "REGISTER", "VERIFY_EMAIL", "RESET_PASSWORD", "UPDATE_PASSWORD", "UPDATE_PROFILE", "UPDATE_EMAIL", "UPDATE_TOTP", "REMOVE_TOTP"],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "noreply@energy-tracker.local",
+    "fromDisplayName": "Home Energy Tracker",
+    "auth": "false",
+    "ssl": "false",
+    "starttls": "false"
+  },
 
   "roles": {
     "realm": [
@@ -76,10 +95,13 @@
 
   "clients": [
     {
-      "clientId": "local-dev",
+      "clientId": "energy-cli",
       "name": "Local dev / test-token client",
       "enabled": true,
       "protocol": "openid-connect",
+
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "http://localhost:3000",
 
       "publicClient": false,
       "secret": "secret",
@@ -111,6 +133,22 @@
           }
         }
       ]
+    },
+
+    {
+      "clientId": "user-service-admin",
+      "name": "Admin client for user-service",
+      "enabled": true,
+      "protocol": "openid-connect",
+
+      "publicClient": false,
+      "secret": "${USER_SERVICE_ADMIN_CLIENT_SECRET}",
+
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": true
     }
 
   ],
@@ -149,6 +187,26 @@
           "temporary": false
         }
       ]
+    },
+    {
+      "username": "service-account-user-service-admin",
+      "enabled": true,
+      "serviceAccountClientId": "user-service-admin",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users"]
+      }
     }
-  ]
+  ],
+
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [ "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}]}" ]
+        }
+      }
+    ]
+  }
 }

@@ -38,6 +38,9 @@
 		     Testing strategy (@DataJpaTest + Testcontainers Postgres,
 		     @SpringBootTest + @EmbeddedKafka) are the first real consumers of this. -->
 		<testcontainers.version>2.0.5</testcontainers.version>
+		<!-- The standalone jar shades its own Jetty and Jackson, so it cannot clash with the Tomcat and Jackson 3
+		     that Spring Boot 4 puts on the classpath. Used to fake Keycloak's HTTP API in user-service's tests. -->
+		<wiremock.version>3.13.1</wiremock.version>
 	</properties>
 
 	<!-- "When I build the root project, these projects are part of my build." -->
@@ -101,6 +104,12 @@
 				<version>${testcontainers.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
+			</dependency>
+
+			<dependency>
+				<groupId>org.wiremock</groupId>
+				<artifactId>wiremock-standalone</artifactId>
+				<version>${wiremock.version}</version>
 			</dependency>
 
 			<!-- Our own shared event contracts. Managed here so a service lists it without a version; every

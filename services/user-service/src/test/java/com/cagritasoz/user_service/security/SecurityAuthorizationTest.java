@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.security;
 
-import com.cagritasoz.user_service.testsupport.TestTokens;
+import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -142,7 +143,7 @@ class SecurityAuthorizationTest extends SecuritySliceTest {
         // 404 is thrown in the MVC routing because MVC can not match /api/v1/users/me/ to /api/v1/users/me. Trailing slash matters.
         mockMvc.perform(get("/api/v1/users/me/").header(HttpHeaders.AUTHORIZATION, TestTokens.user(USER_ID).bearer()))
                 .andExpect(status().isNotFound());
-        verifyNoInteractions(userService);
+        verifyNoInteractions(userProfileService);
     }
 
     @Test
@@ -151,7 +152,7 @@ class SecurityAuthorizationTest extends SecuritySliceTest {
                 .header(HttpHeaders.AUTHORIZATION, TestTokens.user(USER_ID).bearer())));
         mockMvc.perform(get("/api/v1/admin/users/").header(HttpHeaders.AUTHORIZATION, TestTokens.admin(ADMIN_ID).bearer()))
                 .andExpect(status().isNotFound());
-        verifyNoInteractions(userAdminService);
+        verifyNoInteractions(adminUserService);
     }
 
     @Test
@@ -208,5 +209,6 @@ class SecurityAuthorizationTest extends SecuritySliceTest {
 
         call(Route.ME_PATCH, bearer).andExpect(status().isOk());
         call(Route.ME_DELETE, bearer).andExpect(status().isAccepted());
+        call(Route.ME_CANCEL_DELETION, bearer).andExpect(status().isNoContent());
     }
 }

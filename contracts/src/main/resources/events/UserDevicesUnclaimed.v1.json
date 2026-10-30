@@ -1,0 +1,15 @@
+{
+  "eventId": "5b8d2f61-9c07-4e3a-b1d4-7a6c0e9f2d35",
+  "eventType": "UserDevicesUnclaimed",
+  "schemaVersion": 1,
+  "aggregateType": "User",
+  "aggregateId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+  "aggregateVersion": null,
+  "occurredAt": "2026-02-14T23:50:09Z",
+  "correlationId": null,
+  "causationId": "e3c47a90-1d58-4b2f-8a6e-0f9b2d7c4e18",
+  "producer": "device-service",
+  "data": {
+    "devicesUnclaimed": 3
+  }
+}
