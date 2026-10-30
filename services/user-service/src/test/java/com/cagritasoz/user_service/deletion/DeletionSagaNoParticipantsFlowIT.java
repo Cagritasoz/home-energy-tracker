@@ -2,15 +2,21 @@ package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
+import com.github.tomakehurst.wiremock.http.Fault;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.delete;
 import static com.github.tomakehurst.wiremock.client.WireMock.deleteRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -101,6 +107,64 @@ class DeletionSagaNoParticipantsFlowIT extends DeletionSagaFlowSupport {
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100)).until(() -> "DELETED".equals(statusOf(user)));
 
         assertThat(outboxEventTypes(user)).endsWith("UserDeletionStarted", "UserDeletionFinalized");
+
+    }
+
+    // Keycloak is gone completely: even the token endpoint does not answer (the connection is reset), so the admin
+    // client cannot authenticate, let alone delete. Promotion does not talk to Keycloak, so every account whose grace
+    // period ends is still promoted: scrubbed, announced, DELETING. None can be finalized, however long it waits, and
+    // all of them are finished by themselves once Keycloak is back.
+    @Test
+    void keycloakCompletelyDown_everyAccountIsStillPromoted_andAllFinishOnceKeycloakIsBack() throws Exception {
+
+        List<UUID> users = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+        KEYCLOAK.stubFor(delete(urlPathMatching(ANY_USER_PATH)).willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+
+        for (UUID user : users) {
+
+            provisionAndRequestDeletion(user);
+
+        }
+
+        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100)).until(() ->
+                users.stream().allMatch(user -> "DELETING".equals(statusOf(user))));
+
+        for (UUID user : users) {
+
+            assertThat(jdbc.queryForObject("SELECT email FROM users WHERE id = ?", String.class, user))
+                    .as("scrubbed at promotion although Keycloak is down").isEqualTo("deleted+" + user + "@invalid");
+            assertThat(outboxEventTypes(user)).containsExactly("UserRegistered", "UserDeletionScheduled", "UserDeletionStarted");
+
+        }
+
+        // Longer than the quiet period would be if its clock had started: nobody is finalized, nobody is stamped.
+        await().during(Duration.ofSeconds(4)).atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+
+            for (UUID user : users) {
+
+                assertThat(statusOf(user)).isEqualTo("DELETING");
+                assertThat(keycloakDeleted(user)).isFalse();
+
+            }
+
+        });
+
+        // Keycloak is back. The request journal is cleared with the stubs, so what is counted below is only what the
+        // jobs sent after the recovery.
+        KEYCLOAK.resetAll();
+        tokenEndpointIssuesTokens();
+        keycloakAnswersDeletesWith(204);
+
+        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100)).until(() ->
+                users.stream().allMatch(user -> "DELETED".equals(statusOf(user))));
+
+        for (UUID user : users) {
+
+            assertThat(outboxEventTypes(user)).endsWith("UserDeletionStarted", "UserDeletionFinalized");
+            KEYCLOAK.verify(1, deleteRequestedFor(urlPathEqualTo("/admin/realms/energy-tracker/users/" + user)));
+
+        }
 
     }
 }

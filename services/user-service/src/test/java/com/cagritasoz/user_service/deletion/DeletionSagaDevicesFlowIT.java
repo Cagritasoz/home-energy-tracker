@@ -1,6 +1,8 @@
 package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.contracts.EventHeaders;
+import com.cagritasoz.user_service.security.Route;
+import com.cagritasoz.user_service.testsupport.containers.KafkaOutage;
 import com.cagritasoz.user_service.testsupport.containers.KafkaTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.data.ContractFixtures;
@@ -21,6 +23,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // The whole saga with one participant, `devices`, as the application runs it, with a real Kafka broker: the relay
 // publishes user.events.v1, and the test plays device-service by reading UserDeletionStarted from the topic and
@@ -33,7 +36,9 @@ import static org.awaitility.Awaitility.await;
 @TestPropertySource(properties = {
         "app.user.deletion.required-participants=devices",
         "app.user.deletion.ack-consumer.enabled=true",
-        "app.outbox.relay.interval-ms=200"
+        "app.outbox.relay.interval-ms=200",
+        "app.outbox.relay.backoff.initial-ms=500",
+        "app.outbox.relay.backoff.max-ms=2000"
 })
 class DeletionSagaDevicesFlowIT extends DeletionSagaFlowSupport {
 
@@ -133,6 +138,77 @@ class DeletionSagaDevicesFlowIT extends DeletionSagaFlowSupport {
 
     }
 
+    // Kafka goes down in the middle of a deletion. The user's requests and every step of the saga that does not need
+    // Kafka carry on (the promotion, the Keycloak delete, the quiet period), and the announcements wait in the outbox,
+    // unpublished, with the relay failing and backing off. The deletion then waits for device-service, which never
+    // heard UserDeletionStarted. When Kafka is back the announcements go out in order, device-service answers, and the
+    // account is finished. The broker is paused, not stopped, so it keeps its port.
+    @Test
+    void kafkaDown_theAnnouncementsWaitInTheOutbox_andTheDeletionFinishesInOrderOnceKafkaIsBack() throws Exception {
+
+        UUID user = UUID.randomUUID();
+        keycloakAnswersDeletesWith(204);
+
+        // The relay has published and its producer is connected: what is paused next is a working connection.
+        call(Route.ME_GET, user).andExpect(status().isOk());
+        await().atMost(PATIENCE).pollInterval(Duration.ofMillis(200)).until(() -> eventOnTopic(user, "UserRegistered") != null);
+
+        KafkaOutage.begin(kafka);
+
+        try {
+
+            // Requests never touch Kafka: the deletion is accepted and the account is still readable.
+            call(Route.ME_DELETE, user).andExpect(status().isAccepted());
+            call(Route.ME_GET, user).andExpect(status().isOk());
+
+            // The saga's own steps run: promoted (DELETING, devices owed) and its Keycloak user deleted.
+            await().atMost(PATIENCE).pollInterval(Duration.ofMillis(100)).until(() -> keycloakDeleted(user));
+            assertThat(statusOf(user)).isEqualTo("DELETING");
+
+            // The announcements are in the outbox and nowhere else, and the relay's gauges say so.
+            await().atMost(PATIENCE).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
+
+                assertThat(unpublishedEventTypes(user)).containsExactly("UserDeletionScheduled", "UserDeletionStarted");
+                assertThat(meterRegistry.get("outbox.relay.consecutive.failed.ticks").gauge().value()).isPositive();
+                assertThat(meterRegistry.get("outbox.oldest.pending.age.seconds").gauge().value()).isPositive();
+
+            });
+
+            // Past the quiet period, and still not finished: nobody told device-service.
+            await().during(Duration.ofSeconds(4)).atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+
+                assertThat(statusOf(user)).isEqualTo("DELETING");
+                assertThat(unpublishedEventTypes(user)).containsExactly("UserDeletionScheduled", "UserDeletionStarted");
+
+            });
+
+        }
+        finally {
+
+            KafkaOutage.end(kafka);
+
+        }
+
+        // Kafka is back: the relay catches up, in order. (A record may arrive twice, the outbox promises at-least-once;
+        // the order of first appearances is what must hold.)
+        ConsumerRecord<String, String> started = await().atMost(PATIENCE).pollInterval(Duration.ofMillis(500))
+                .until(() -> eventOnTopic(user, "UserDeletionStarted"), event -> event != null);
+        assertThat(distinctTypesOnTopic(user)).containsExactly("UserRegistered", "UserDeletionScheduled", "UserDeletionStarted");
+        await().atMost(PATIENCE).pollInterval(Duration.ofMillis(200)).until(() -> unpublishedEventTypes(user).isEmpty());
+
+        // device-service hears it now and answers; the deletion ends, and the last announcement follows.
+        client().send(DEVICE_EVENTS, user.toString(), confirmation(user, header(started, EventHeaders.EVENT_ID)));
+
+        await().atMost(PATIENCE).pollInterval(Duration.ofMillis(200)).until(() -> "DELETED".equals(statusOf(user)));
+        await().atMost(PATIENCE).pollInterval(Duration.ofMillis(500)).until(() -> distinctTypesOnTopic(user).size() == 4);
+
+        assertThat(distinctTypesOnTopic(user)).containsExactly(
+                "UserRegistered", "UserDeletionScheduled", "UserDeletionStarted", "UserDeletionFinalized");
+        assertThat(pendingDevices()).isZero();
+        assertThat(client().readAll(DEVICE_EVENTS + ".dlt").stream().filter(record -> user.toString().equals(record.key()))).isEmpty();
+
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
 
     // What device-service sends, made out to this user; causationId is the id of the event it answers when known.
@@ -162,6 +238,20 @@ class DeletionSagaDevicesFlowIT extends DeletionSagaFlowSupport {
     private List<ConsumerRecord<String, String>> recordsOnTopic(UUID user) {
 
         return client().readAll(USER_EVENTS).stream().filter(record -> user.toString().equals(record.key())).toList();
+
+    }
+
+    // Each type once, in the order it first appears: what must hold even if the relay delivers a record twice.
+    private List<String> distinctTypesOnTopic(UUID user) {
+
+        return typesOnTopic(user).stream().distinct().toList();
+
+    }
+
+    private List<String> unpublishedEventTypes(UUID user) {
+
+        return jdbc.queryForList("SELECT event_type FROM outbox_events WHERE aggregate_id = ? AND published_at IS NULL ORDER BY seq",
+                String.class, user.toString());
 
     }
 

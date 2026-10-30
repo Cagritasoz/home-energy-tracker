@@ -22,7 +22,7 @@
 
 **Repository and schema** (`@DataJpaTest` + `replace = NONE` + `@Import(PostgresTestContainerConfig)`: `postgres:16-alpine` through `@ServiceConnection`, shared through Spring's context cache):
 - `UserSchemaIT`: primary key, NOT NULLs, defaults, every CHECK (each deletion rule has an accepted and a rejected case built from `columnsFor(status)`, a legal row of that status, so only the rule under test can fire), `uq_users_email`, the deletion indexes, the `updated_at` trigger. `UserDeletionParticipantsSchemaIT` for V13.
-- `UserRepositoryIT`: mapping, `@Version`, stale copy → `OptimisticLockingFailureException`, paging order, and every outcome of the native queries (row counts, compare-and-set guards, constraint violations, detached entities after `clearAutomatically`).
+- `UserRepositoryIT`: mapping, `@Version`, a detached stale copy → `OptimisticLockingFailureException` (the managed-entity path is different, see the gotchas), paging order, and every outcome of the native queries (row counts, compare-and-set guards, constraint violations, detached entities after `clearAutomatically`).
 - `OutboxEventSchemaIT` (plain SQL: identity order, uniqueness, defaults, NOT NULLs, every CHECK, jsonb payload, V8's checks, the partial index definitions via `pg_indexes`), `ProcessedEventSchemaIT` (V10: primary key per `(event_id, handler)`, `ON CONFLICT DO NOTHING` returns 0 on redelivery), `UserDeletionParticipantRepositoryIT`.
 - `MigrationUpgradeIT` (no Spring, its own container): Flyway to V7 in a fresh schema, rows inserted, upgraded to latest; an inconsistent V7 row makes V9 fail while V8 stays applied; a V10 database with `DELETING` and `DELETED` rows is backfilled by V11 and the old columns are gone.
 
@@ -41,7 +41,7 @@
 
 ## Concurrency tests
 
-Opt out of `@DataJpaTest`'s rolled-back transaction (`@Transactional(propagation = NOT_SUPPORTED)`), give each thread its own transaction (`TransactionTemplate` with `REQUIRES_NEW`), clean up afterwards, and force the overlap deterministically (hold A's transaction open, wait until B is blocked, for example through `pg_stat_activity` with Awaitility, then commit A) instead of relying on timing. Each race test sits next to the feature it races (`DeletionPromotionConcurrencyIT` is the model), not in a repository-level class.
+Opt out of `@DataJpaTest`'s rolled-back transaction (`@Transactional(propagation = NOT_SUPPORTED)`), give each thread its own transaction (`TransactionTemplate` with `REQUIRES_NEW`), clean up afterwards, and force the overlap deterministically (hold A's transaction open, wait until B is blocked, for example through `pg_stat_activity` with Awaitility, then commit A) instead of relying on timing. Each race test sits next to the feature it races (`DeletionPromotionConcurrencyIT` is the model; `DeletionFinalizationConcurrencyIT` and `DeletionRequestConcurrencyIT` follow it), not in a repository-level class. Where a side must NOT wait for the other (a confirmation against a holder of the users row), the test shows it by finishing that side while the first transaction is still open, on its own thread so that a wrong wait fails by timeout instead of hanging. A race that cannot be staged because the interleaving is inside one request is run over HTTP many times instead (`AccountDeletionHttpRaceIT`: 25 pairs of simultaneous requests, asserting what must hold whichever request wins). A broker outage is `testsupport/containers/KafkaOutage` (the container is paused, so it keeps its port).
 
 ## Coverage
 
@@ -50,7 +50,6 @@ Opt out of `@DataJpaTest`'s rolled-back transaction (`@Transactional(propagation
 ## What is missing
 
 - Tests of a consumer that applies state (the version guard and the tombstone): the first one is device-service's handling of user events.
-- The saga's remaining concurrency and failure tests (`docs/design/03-account-deletion-saga.md`, section 17).
 - End-to-end tests (`e2e/` is a stub).
 
 ## CI

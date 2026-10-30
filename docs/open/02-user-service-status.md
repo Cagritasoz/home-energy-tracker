@@ -52,7 +52,7 @@ The database owns time: `created_at` has a default and a `BEFORE UPDATE` trigger
 ## API
 
 - `GET /api/v1/users/me`: the account, including `status` and `deletionScheduledFor` (the frontend shows the banner and Cancel from them).
-- `PATCH /api/v1/users/me`: `displayName` (at most 100 characters, non-blank, stripped) and `timezone` (one of `ZoneId.getAvailableZoneIds()`: exact case-sensitive id, no offsets like `+03:00`, no trimming; null means not sent; `@ValidTimezone` / `TimezoneValidator`). `@Version` conflicts answer 409. A `DELETION_SCHEDULED` row answers 409 `deletion-scheduled` (the grace period is read-only); a `DELETING`/`DELETED` row answers 410 (a deletion can commit between the interceptor's check and the service's read). `email` in the body answers 400 `validation-failed` (the field is declared with `@Null` only so a request that sends it fails instead of being ignored; other unknown fields are ignored, which is Jackson 3's default and is not changed because the mapper is shared with future Kafka consumers). `UserUpdated` is emitted only if the version moved.
+- `PATCH /api/v1/users/me`: `displayName` (at most 100 characters, non-blank, stripped) and `timezone` (one of `ZoneId.getAvailableZoneIds()`: exact case-sensitive id, no offsets like `+03:00`, no trimming; null means not sent; `@ValidTimezone` / `TimezoneValidator`). The row is read `FOR UPDATE` and checked under that lock, so concurrent edits and a concurrent schedule serialize on it (a stale write cannot happen, and `@Version` stays the event's aggregate version). A `DELETION_SCHEDULED` row answers 409 `deletion-scheduled` (the grace period is read-only); a `DELETING`/`DELETED` row answers 410 (a deletion can commit between the interceptor's check and the service's read). `email` in the body answers 400 `validation-failed` (the field is declared with `@Null` only so a request that sends it fails instead of being ignored; other unknown fields are ignored, which is Jackson 3's default and is not changed because the mapper is shared with future Kafka consumers). `UserUpdated` is emitted only if the version moved.
 - `DELETE /api/v1/users/me` and `POST /api/v1/users/me/deletion/cancel`: the saga's HTTP contract, in section 6 of the saga design.
 - Admin (role `admin`): `GET /api/v1/admin/users` (paged, `size` at most 100, sort `createdAt DESC, id`) and `GET /api/v1/admin/users/{id}` (includes the deletion columns and the participant rows). Read-only; write endpoints are planned (`03-roadmap.md`).
 - Errors are `ProblemDetail`s from one `GlobalExceptionHandler` (see `04-conventions.md`).
@@ -70,7 +70,7 @@ Every state change writes its event to `outbox_events` in the same transaction; 
 
 ## Deletion saga
 
-Implemented end to end: states, HTTP endpoints, promoter, Keycloak admin client, hard-delete job, orphan email collision, the consumer of the participants' confirmations, the finalizer, the watchdog gauges. What is left is the saga's concurrency and failure tests. Design, tests and roadmap: `docs/design/03-account-deletion-saga.md`.
+Implemented end to end: states, HTTP endpoints, promoter, Keycloak admin client, hard-delete job, orphan email collision, the consumer of the participants' confirmations, the finalizer, the watchdog gauges. The concurrency and failure tests are done too (races between jobs, between requests and between a confirmation and the finalizer; Keycloak and Kafka down). Design, tests and roadmap: `docs/design/03-account-deletion-saga.md`.
 
 ## Metrics
 
@@ -103,7 +103,7 @@ The service is built to run as N instances against one database and one Kafka cl
 | In-memory state (retry counters of the error handler, the Keycloak circuit breaker and token) | per instance | it is only an optimisation or a protection of that instance |
 | Gauges and counters | every instance reports the same database-wide gauges (aggregate with max or average, never sum); counters are per instance (sum them) | |
 
-Proven: the races between two jobs or two services on one database (the integration tests of the promoter, finalizer, Keycloak job, confirmation consumer). Not proven: two JVMs against one broker. To size when deploying: each instance has its own connection pool (10 by default) and the relay holds a connection for its tick, so instances times pool size must stay under Postgres's `max_connections`.
+Proven: the races between two jobs or two services on one database (the integration tests of the promoter, finalizer, Keycloak job, confirmation consumer), between a confirmation and the finalizer, and between the customer's own requests (two `DELETE`s, a `PATCH` against a schedule, two `PATCH`es), staged and over HTTP; Kafka and Keycloak down in the middle of a deletion. Not proven: two JVMs against one broker. To size when deploying: each instance has its own connection pool (10 by default) and the relay holds a connection for its tick, so instances times pool size must stay under Postgres's `max_connections`.
 
 ## Configuration
 

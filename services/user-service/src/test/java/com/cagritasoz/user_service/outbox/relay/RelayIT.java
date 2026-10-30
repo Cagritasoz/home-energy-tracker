@@ -1,12 +1,11 @@
 package com.cagritasoz.user_service.outbox.relay;
 
 import com.cagritasoz.contracts.EventHeaders;
-import com.github.dockerjava.api.command.PauseContainerCmd;
-import com.github.dockerjava.api.command.UnpauseContainerCmd;
 import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.kafka.KafkaProducerConfig;
 import com.cagritasoz.user_service.outbox.OutboxEvent;
 import com.cagritasoz.user_service.outbox.OutboxRepository;
+import com.cagritasoz.user_service.testsupport.containers.KafkaOutage;
 import com.cagritasoz.user_service.testsupport.containers.KafkaTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -560,23 +559,15 @@ class RelayIT {
 
     }
 
-    // "Broker down" without losing its port: a paused container keeps its mapped port but answers nothing,
-    // like a machine that dropped off the network. Stopping it would give the restarted broker a new port.
     private void pauseBroker() {
 
-        // docker-java commands are AutoCloseable, so try-with-resources is the form expected. For these
-        // two commands close() releases nothing; it only keeps the resource-leak inspection quiet.
-        try (PauseContainerCmd pause = kafka.getDockerClient().pauseContainerCmd(kafka.getContainerId())) {
-            pause.exec();
-        }
+        KafkaOutage.begin(kafka);
 
     }
 
     private void unpauseBroker() {
 
-        try (UnpauseContainerCmd unpause = kafka.getDockerClient().unpauseContainerCmd(kafka.getContainerId())) {
-            unpause.exec();
-        }
+        KafkaOutage.end(kafka);
 
     }
 }

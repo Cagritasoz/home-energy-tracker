@@ -112,9 +112,13 @@ abstract class DeletionSagaFlowSupport {
 
     }
 
+    // Every user has an address of their own, as real users do: the table allows one account per address, and a second
+    // user with the first one's address would be taken for a registration that collides with an orphan.
     ResultActions call(Route route, UUID userId) throws Exception {
 
-        return mockMvc.perform(route.request().header(HttpHeaders.AUTHORIZATION, TestTokens.user(userId).bearer()));
+        String bearer = TestTokens.user(userId).claim("email", "user." + userId + "@example.com").bearer();
+
+        return mockMvc.perform(route.request().header(HttpHeaders.AUTHORIZATION, bearer));
 
     }
 
