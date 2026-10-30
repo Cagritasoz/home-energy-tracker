@@ -1,9 +1,9 @@
 package com.cagritasoz.user_service.deletion;
 
-import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
 import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import io.micrometer.core.instrument.MeterRegistry;

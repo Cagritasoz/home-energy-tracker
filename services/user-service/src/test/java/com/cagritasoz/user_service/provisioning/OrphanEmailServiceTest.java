@@ -1,5 +1,6 @@
-package com.cagritasoz.user_service.deletion;
+package com.cagritasoz.user_service.provisioning;
 
+import com.cagritasoz.user_service.deletion.DeletionSchedulingService;
 import com.cagritasoz.user_service.keycloak.KeycloakAdmin;
 import com.cagritasoz.user_service.keycloak.KeycloakCircuitOpenException;
 import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;

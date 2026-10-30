@@ -4,6 +4,7 @@ import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.profile.UpdateUserRequest;
 import com.cagritasoz.user_service.profile.UserProfileService;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.user.DeletionScheduledException;
 import com.cagritasoz.user_service.user.UserResponse;
 import com.cagritasoz.user_service.user.UserStatus;
 import org.junit.jupiter.api.AfterEach;

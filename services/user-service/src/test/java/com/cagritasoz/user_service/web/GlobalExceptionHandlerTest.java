@@ -1,13 +1,13 @@
 package com.cagritasoz.user_service.web;
 
 import com.cagritasoz.user_service.deletion.DeletionDeadlinePassedException;
-import com.cagritasoz.user_service.deletion.DeletionScheduledException;
 import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
 import com.cagritasoz.user_service.provisioning.EmailAlreadyInUseException;
 import com.cagritasoz.user_service.provisioning.EmailBeingReleasedException;
 import com.cagritasoz.user_service.provisioning.EmailNotVerifiedException;
 import com.cagritasoz.user_service.provisioning.MissingIdentityClaimException;
 import com.cagritasoz.user_service.user.AccountDeletedException;
+import com.cagritasoz.user_service.user.DeletionScheduledException;
 import com.cagritasoz.user_service.user.UserNotFoundException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

@@ -1,6 +1,5 @@
 package com.cagritasoz.user_service.provisioning;
 
-import com.cagritasoz.user_service.deletion.OrphanEmailService;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.user.AccountDeletedException;
 import com.cagritasoz.user_service.user.User;

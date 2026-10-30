@@ -1,4 +1,4 @@
-package com.cagritasoz.user_service.security;
+package com.cagritasoz.user_service.testsupport.web;
 
 import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpMethod;

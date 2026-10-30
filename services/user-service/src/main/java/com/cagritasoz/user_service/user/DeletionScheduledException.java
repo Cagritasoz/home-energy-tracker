@@ -1,4 +1,4 @@
-package com.cagritasoz.user_service.deletion;
+package com.cagritasoz.user_service.user;
 
 // A write was refused because the account is DELETION_SCHEDULED: during the grace period the account is
 // readable (and cancellable) but read-only. 409 rather than 403: the caller is allowed to write in general, the

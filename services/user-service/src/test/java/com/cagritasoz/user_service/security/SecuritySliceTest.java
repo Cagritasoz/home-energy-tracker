@@ -6,6 +6,7 @@ import com.cagritasoz.user_service.deletion.DeletionSchedulingService;
 import com.cagritasoz.user_service.profile.UserProfileService;
 import com.cagritasoz.user_service.provisioning.UserProvisioningService;
 import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import com.cagritasoz.user_service.user.UserResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;

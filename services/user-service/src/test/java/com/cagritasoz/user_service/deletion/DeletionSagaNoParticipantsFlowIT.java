@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.deletion;
 
-import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import com.github.tomakehurst.wiremock.http.Fault;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;

@@ -2,9 +2,9 @@ package com.cagritasoz.user_service.provisioning;
 
 import com.cagritasoz.user_service.keycloak.KeycloakCircuitOpenException;
 import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
-import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.security.SecuritySliceTest;
 import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import com.cagritasoz.user_service.user.AccountDeletedException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

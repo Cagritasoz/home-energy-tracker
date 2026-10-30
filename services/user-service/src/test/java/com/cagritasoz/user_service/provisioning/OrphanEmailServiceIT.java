@@ -1,5 +1,7 @@
-package com.cagritasoz.user_service.deletion;
+package com.cagritasoz.user_service.provisioning;
 
+import com.cagritasoz.user_service.deletion.DeletionPromotionService;
+import com.cagritasoz.user_service.deletion.DeletionSchedulingService;
 import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;

@@ -1,10 +1,10 @@
 package com.cagritasoz.user_service.provisioning;
 
-import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
 import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;

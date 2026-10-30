@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.security;
 
 import com.cagritasoz.user_service.testsupport.jwt.LocalJwks;
 import com.cagritasoz.user_service.testsupport.jwt.TestTokens;
+import com.cagritasoz.user_service.testsupport.web.Route;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;

@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.deletion;
 
+import com.cagritasoz.user_service.testsupport.web.Route;
 import com.cagritasoz.contracts.EventHeaders;
-import com.cagritasoz.user_service.security.Route;
 import com.cagritasoz.user_service.testsupport.containers.KafkaOutage;
 import com.cagritasoz.user_service.testsupport.containers.KafkaTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;

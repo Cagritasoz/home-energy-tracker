@@ -1,8 +1,8 @@
 package com.cagritasoz.user_service.profile;
 
-import com.cagritasoz.user_service.deletion.DeletionScheduledException;
 import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import com.cagritasoz.user_service.testsupport.jwt.JwtFixtures;
+import com.cagritasoz.user_service.user.DeletionScheduledException;
 import com.cagritasoz.user_service.user.UserNotFoundException;
 import com.cagritasoz.user_service.user.UserResponse;
 import com.cagritasoz.user_service.user.UserStatus;

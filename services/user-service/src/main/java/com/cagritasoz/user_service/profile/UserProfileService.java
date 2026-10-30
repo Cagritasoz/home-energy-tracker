@@ -1,8 +1,8 @@
 package com.cagritasoz.user_service.profile;
 
-import com.cagritasoz.user_service.deletion.DeletionScheduledException;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.user.AccountDeletedException;
+import com.cagritasoz.user_service.user.DeletionScheduledException;
 import com.cagritasoz.user_service.user.User;
 import com.cagritasoz.user_service.user.UserNotFoundException;
 import com.cagritasoz.user_service.user.UserRepository;
