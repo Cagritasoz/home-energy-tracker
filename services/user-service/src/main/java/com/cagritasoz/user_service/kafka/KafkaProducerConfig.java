@@ -31,28 +31,52 @@ import java.util.Map;
 // a bean of that type (ConditionalOnMissingBean). With two producers that is intended: they are all declared here, so no
 // bean of Boot's exists, and a bean that needs one picks it with @Qualifier.
 //
-// relayProducerFactory is built the way Boot builds its own: spring.kafka.producer.* (application.yaml), then what the
-// connection details say about the connection (the bootstrap servers, security protocol and SSL bundle: this is how a
-// Testcontainers @ServiceConnection or a platform points the producer at its broker, and spring.kafka.producer.* alone
-// would miss it), then Boot's DefaultKafkaProducerFactoryCustomizer beans (the Micrometer client metrics).
+// Both factories are built the way Boot builds its own: spring.kafka.producer.* (application.yaml, what every producer of
+// the service shares), then the client id of the producer (app.kafka.relay-producer.client-id and
+// app.kafka.dead-letter-producer.client-id, each read with @Value), then what the connection details say about the
+// connection (the bootstrap servers, security protocol and SSL bundle: this is how a Testcontainers @ServiceConnection or
+// a platform points the producer at its broker, and spring.kafka.producer.* alone would miss it), then Boot's
+// DefaultKafkaProducerFactoryCustomizer beans (the Micrometer client metrics).
 //
-// deadLetterProducerFactory is the relay's copied with a different client id (app.kafka.dead-letter-producer.client-id)
-// and nothing else changed: the durability settings (acks=all, idempotence) belong to every producer of the service, and
-// the relay's fail-fast timeouts suit a dead-letter send too, because a send that fails leaves the record unrecovered and
-// the error handler tries it again. A second producer needs its own client id because the client id names the producer's
-// metrics (a client id registered twice in one JVM collides) and shows in the broker's logs and quotas. To give it
-// settings of its own later, build it here from its own properties instead of copying.
+// The two differ only in the client id, on purpose: the durability settings (acks=all, idempotence) belong to every
+// producer of the service, and the relay's fail-fast timeouts suit a dead-letter send too, because a send that fails
+// leaves the record unrecovered and the error handler tries it again. Each producer needs its own client id because the
+// client id names the producer's metrics (a client id registered twice in one JVM collides) and shows in the broker's
+// logs and quotas. To give one of them settings of its own later, put them in properties of its own and add them to the
+// map in its factory method, before the shared builder creates the factory.
 //
 // The factories are beans, so Spring closes them (and their producers) with the application context.
 @Configuration
 public class KafkaProducerConfig {
 
     @Bean
-    ProducerFactory<String, String> relayProducerFactory(KafkaProperties properties,
+    ProducerFactory<String, String> relayProducerFactory(@Value("${app.kafka.relay-producer.client-id}") String clientId,
+                                                         KafkaProperties properties,
                                                          KafkaConnectionDetails connectionDetails,
                                                          ObjectProvider<DefaultKafkaProducerFactoryCustomizer> customizers) {
 
+        return producerFactory(clientId, properties, connectionDetails, customizers);
+
+    }
+
+    @Bean
+    ProducerFactory<String, String> deadLetterProducerFactory(@Value("${app.kafka.dead-letter-producer.client-id}") String clientId,
+                                                              KafkaProperties properties,
+                                                              KafkaConnectionDetails connectionDetails,
+                                                              ObjectProvider<DefaultKafkaProducerFactoryCustomizer> customizers) {
+
+        return producerFactory(clientId, properties, connectionDetails, customizers);
+
+    }
+
+    private static ProducerFactory<String, String> producerFactory(String clientId,
+                                                                   KafkaProperties properties,
+                                                                   KafkaConnectionDetails connectionDetails,
+                                                                   ObjectProvider<DefaultKafkaProducerFactoryCustomizer> customizers) {
+
         Map<String, Object> producerProperties = properties.buildProducerProperties();
+
+        producerProperties.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
 
         KafkaConnectionDetails.Configuration connection = connectionDetails.getProducer();
         producerProperties.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, connection.getBootstrapServers());
@@ -70,14 +94,6 @@ public class KafkaProducerConfig {
         customizers.orderedStream().forEach(customizer -> customizer.customize(factory));
 
         return factory;
-
-    }
-
-    @Bean
-    ProducerFactory<String, String> deadLetterProducerFactory(@Qualifier("relayProducerFactory") ProducerFactory<String, String> relayProducerFactory,
-                                                              @Value("${app.kafka.dead-letter-producer.client-id}") String clientId) {
-
-        return relayProducerFactory.copyWithConfigurationOverride(Map.of(ProducerConfig.CLIENT_ID_CONFIG, clientId));
 
     }
 

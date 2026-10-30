@@ -94,11 +94,14 @@ class KafkaConfigurationTest {
 
         withTheApplicationYaml((kafka, environment) -> {
 
-            String relay = value(kafka.buildProducerProperties(), ProducerConfig.CLIENT_ID_CONFIG);
+            String relay = environment.getProperty("app.kafka.relay-producer.client-id");
             String deadLetter = environment.getProperty("app.kafka.dead-letter-producer.client-id");
 
             assertThat(relay).isEqualTo("user-service-outbox-relay");
             assertThat(deadLetter).isEqualTo("user-service-dead-letter").isNotEqualTo(relay);
+
+            // What the producers share carries no client id: each producer adds its own.
+            assertThat(kafka.buildProducerProperties()).doesNotContainKey(ProducerConfig.CLIENT_ID_CONFIG);
 
         });
 

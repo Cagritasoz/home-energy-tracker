@@ -9,6 +9,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.config.SslConfigs;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.context.PropertyPlaceholderAutoConfiguration;
 import org.springframework.boot.kafka.autoconfigure.DefaultKafkaProducerFactoryCustomizer;
 import org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
@@ -39,15 +40,19 @@ import static org.mockito.Mockito.mock;
 // listener, and each user must get the right one by name.
 class KafkaProducersWiringTest {
 
-    private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(KafkaAutoConfiguration.class))
+    // PropertyPlaceholderAutoConfiguration is what an application has and a bare runner lacks: the strict resolver that
+    // fails the start-up on an @Value whose key is missing (without it the placeholder text itself would be injected).
+    private final ApplicationContextRunner withoutClientIds = new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(PropertyPlaceholderAutoConfiguration.class, KafkaAutoConfiguration.class))
             .withUserConfiguration(KafkaProducerConfig.class)
             .withPropertyValues(
                     "spring.kafka.bootstrap-servers=localhost:1",
-                    "spring.kafka.producer.client-id=relay-client",
                     "spring.kafka.producer.acks=all",
-                    "spring.kafka.producer.properties.delivery.timeout.ms=5000",
-                    "app.kafka.dead-letter-producer.client-id=dead-letter-client");
+                    "spring.kafka.producer.properties.delivery.timeout.ms=5000");
+
+    private final ApplicationContextRunner runner = withoutClientIds.withPropertyValues(
+            "app.kafka.relay-producer.client-id=relay-client",
+            "app.kafka.dead-letter-producer.client-id=dead-letter-client");
 
     @Test
     void theContextHasTheTwoTemplatesAndTheirFactories_andNoneOfBoots() {
@@ -65,7 +70,7 @@ class KafkaProducersWiringTest {
     }
 
     @Test
-    void theRelayKeepsItsClientIdFromTheYaml() {
+    void theRelayHasItsOwnClientIdAndTheSharedSettings() {
 
         runner.run(context -> {
 
@@ -75,6 +80,35 @@ class KafkaProducersWiringTest {
                     .containsEntry(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "5000");
 
         });
+
+    }
+
+    // The yaml says not to set spring.kafka.producer.client-id because the config overwrites it: a stale one must change
+    // neither producer.
+    @Test
+    void aClientIdInTheSharedSettingsIsOverwrittenForBothProducers() {
+
+        runner.withPropertyValues("spring.kafka.producer.client-id=stale-shared-client")
+                .run(context -> {
+
+                    assertThat(configurationOf(context.getBean("relayKafkaTemplate", KafkaTemplate.class)))
+                            .containsEntry(ProducerConfig.CLIENT_ID_CONFIG, "relay-client");
+                    assertThat(configurationOf(context.getBean("deadLetterKafkaTemplate", KafkaTemplate.class)))
+                            .containsEntry(ProducerConfig.CLIENT_ID_CONFIG, "dead-letter-client");
+
+                });
+
+    }
+
+    // Both client ids are required: a missing one fails the start-up instead of giving a producer a generated name.
+    @Test
+    void aMissingClientIdFailsTheStartUp() {
+
+        withoutClientIds.withPropertyValues("app.kafka.dead-letter-producer.client-id=dead-letter-client")
+                .run(context -> assertThat(context).hasFailed());
+
+        withoutClientIds.withPropertyValues("app.kafka.relay-producer.client-id=relay-client")
+                .run(context -> assertThat(context).hasFailed());
 
     }
 
@@ -155,10 +189,9 @@ class KafkaProducersWiringTest {
 
     }
 
-    // What Boot adds to its own factory (the Micrometer client metrics are such a customizer), the relay's has too, and
-    // the dead-letter factory, a copy of it, keeps.
+    // What Boot adds to its own factory (the Micrometer client metrics are such a customizer), both factories have too.
     @Test
-    void theFactoryCustomizersAreAppliedToTheRelayAndKeptByTheCopy() {
+    void theFactoryCustomizersAreAppliedToBothFactories() {
 
         ProducerFactory.Listener<String, String> listener = new ProducerFactory.Listener<>() {
         };

@@ -41,13 +41,12 @@ spring:
   kafka:
     bootstrap-servers: localhost:9094
 
-    # The outbox relay's producer (relayKafkaTemplate, the one OutboxBatchPublisher gets). The dead-letter
-    # publisher's producer (deadLetterKafkaTemplate) is a copy of this one that differs only in what
-    # app.kafka.dead-letter-producer says. Both are declared in KafkaProducerConfig.
+    # What both producers of the service share: the outbox relay's (relayKafkaTemplate, the one OutboxBatchPublisher gets)
+    # and the dead-letter publisher's (deadLetterKafkaTemplate). Both are declared in KafkaProducerConfig, each with its
+    # own client id from app.kafka.* below. Setting client-id here is wrong: the config overwrites it, so it would be ignored.
     producer:
        key-serializer: org.apache.kafka.common.serialization.StringSerializer
        value-serializer: org.apache.kafka.common.serialization.StringSerializer
-       client-id: user-service-outbox-relay
        compression-type: none
 
        # --- durability ---
@@ -165,9 +164,14 @@ management:
 
 app:
   kafka:
-    # The producer that publishes records the consumer could not apply to their dead-letter topic: spring.kafka.producer.*
-    # with its own client id (the client id names a producer's metrics and shows in the broker's logs, so two producers
-    # must not share one).
+    # The identity of each producer of the service; everything else about them is spring.kafka.producer.* above. The
+    # client id names a producer's metrics and shows in the broker's logs and quotas, so two producers must not share one.
+    #
+    # The producer that publishes the outbox rows (OutboxBatchPublisher).
+    relay-producer:
+      client-id: user-service-outbox-relay
+
+    # The producer that publishes records the consumer could not apply to their dead-letter topic.
     dead-letter-producer:
       client-id: user-service-dead-letter
 
