@@ -26,6 +26,7 @@ Modules are `testcontainers-postgresql`, `testcontainers-junit-jupiter`, …; `o
 - A native `@Modifying` query bypasses the persistence context: an entity loaded earlier in the same transaction stays stale. Use `clearAutomatically = true` (detaches everything), then re-read.
 - Hibernate auto-flushes pending changes before native queries; `JdbcTemplate` does not (flush first).
 - `saveAndFlush` of an unchanged entity, or a setter with the same value, issues no `UPDATE` and no version bump.
+- Hibernate 7.4: a versioned entity with a column the database generates on update (`@Generated(event = UPDATE)`, here `users.updated_at`) is updated with `RETURNING`, and an `UPDATE` that matches no row (another transaction changed the row since it was read) does not raise an optimistic-locking failure: it fails with `JpaSystemException: The database returned no natively generated values`, which is a 500. The stale-copy test only reaches the other path (`saveAndFlush` of a detached copy compares versions in `merge`). So a read-modify-write of such an entity reads the row `FOR UPDATE` (`@Lock(PESSIMISTIC_WRITE)`, as `UserRepository.findByIdForUpdate` does for the profile update): the writers queue on the row lock instead of colliding. The service's other writes are native compare-and-set `UPDATE`s and do not depend on this.
 - In `@DataJpaTest` (one transaction per test): flush before JDBC reads, clear before entity re-reads.
 - Lombok: `@Value` on a `final` field plus `@RequiredArgsConstructor` makes Spring look for a bean of type `int`.
 

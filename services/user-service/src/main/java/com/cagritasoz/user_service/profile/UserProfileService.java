@@ -31,12 +31,14 @@ public class UserProfileService {
     @Transactional
     public UserResponse updateUser(UUID id, UpdateUserRequest request) {
 
-        User user = findUser(id);
+        // The row is locked from this read until the commit: the interceptor's check committed before this
+        // transaction began, and a deletion request can land in between, so the write rules are enforced here, on the
+        // row this transaction is about to change, and nothing can change it under the check. A schedule that comes
+        // while this runs waits for the commit; one that committed first is seen by this read, and the update is
+        // refused below. (Why the lock and not the version check alone: see findByIdForUpdate.)
+        User user = userRepository.findByIdForUpdate(id)
+                .orElseThrow(UserNotFoundException::new);
 
-        // The interceptor's check committed before this transaction began; a deletion request can land in between,
-        // so the write rules are enforced here, on the row this transaction is about to change. A concurrent
-        // schedule that commits after this read but before the save moves the version, and @Version turns the
-        // save into a 409 instead of a silent overwrite.
         switch (user.getStatus()) {
 
             case ACTIVE -> { }

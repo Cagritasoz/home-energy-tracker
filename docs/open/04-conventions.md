@@ -17,6 +17,8 @@ This is a learning project: heavy explanatory comments are intentional and are n
 
 Every status-changing `UPDATE` is a compare-and-set: it carries `WHERE status = '<expected>'` and reports the rows affected (`int`). The database constraint (primary key, partial unique index) is the real uniqueness guarantee; an application pre-check only improves the error message.
 
+A change that is not a status transition (a profile edit) is a read-modify-write of the entity: it reads the row `FOR UPDATE` (`UserRepository.findByIdForUpdate`) and decides under that lock, so it queues behind every other writer of the row instead of colliding with it. A plain read followed by a version-checked write is not enough: Hibernate cannot report that collision for this entity (`05-framework-and-tooling-gotchas.md`, Hibernate and JPA).
+
 ## Packages
 
 A service is organised by feature, not by layer (user-service since the restructure; the other services adopt it when rebuilt). A feature's controller, service, DTOs, entity, repository, exceptions and jobs sit in one package named after it, so there is no `controller`, `service`, `dto`, `entity`, `model`, `util` or `common` package to scatter a feature across.

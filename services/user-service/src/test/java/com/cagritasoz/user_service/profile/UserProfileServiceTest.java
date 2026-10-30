@@ -110,7 +110,7 @@ class UserProfileServiceTest {
     @Test
     void updateUser_displayNameOnly_leavesTimezoneUnchangedAndRecordsUpdatedEvent() {
         User existing = activeUser();
-        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(existing));
+        when(userRepository.findByIdForUpdate(USER_ID)).thenReturn(Optional.of(existing));
 
         // saveAndFlush is stubbed to hand back the same entity it was called with, but with its
         // version bumped - mirroring what Hibernate's own dirty checking really does when a field
@@ -135,7 +135,7 @@ class UserProfileServiceTest {
     @Test
     void updateUser_emptyRequest_isANoOpButStillSaves() {
         User existing = activeUser();
-        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(existing));
+        when(userRepository.findByIdForUpdate(USER_ID)).thenReturn(Optional.of(existing));
         // Nothing changes, so a real saveAndFlush would leave the version exactly as it was -
         // this stub mirrors that (unlike the test above, no version bump), which is what makes
         // this test actually prove the no-op case, not just assert it by naming the method that way.
@@ -151,11 +151,26 @@ class UserProfileServiceTest {
         verifyNoInteractions(outboxService);
     }
 
+    // The row is read for update, under its lock, and nothing else: a read without the lock could be followed by a
+    // write on a copy that a schedule has made stale.
+    @Test
+    void updateUser_unknownId_throwsUserNotFoundAndWritesNothing() {
+        when(userRepository.findByIdForUpdate(USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userProfileService.updateUser(USER_ID,
+                UpdateUserRequest.builder().displayName(UserFixtures.LEON_KENNEDY_NAME).build()))
+                .isInstanceOf(UserNotFoundException.class);
+
+        verify(userRepository, never()).findById(any());
+        verify(userRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(outboxService);
+    }
+
     // The race: PATCH passed the interceptor while ACTIVE, a deletion request then committed, and only now does
     // updateUser read the row. Scheduled means read-only (409, cancel and retry); DELETING or DELETED means gone (410).
     @Test
     void updateUser_scheduledAccount_throwsDeletionScheduledAndWritesNothing() {
-        when(userRepository.findById(USER_ID))
+        when(userRepository.findByIdForUpdate(USER_ID))
                 .thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).status(UserStatus.DELETION_SCHEDULED).build()));
 
         assertThatThrownBy(() -> userProfileService.updateUser(USER_ID,
@@ -169,7 +184,7 @@ class UserProfileServiceTest {
     @ParameterizedTest(name = "status={0}")
     @EnumSource(value = UserStatus.class, names = {"DELETING", "DELETED"})
     void updateUser_deletingOrDeletedAccount_throwsAccountDeletedAndWritesNothing(UserStatus status) {
-        when(userRepository.findById(USER_ID))
+        when(userRepository.findByIdForUpdate(USER_ID))
                 .thenReturn(Optional.of(UserFixtures.activeUser().id(USER_ID).status(status).build()));
 
         assertThatThrownBy(() -> userProfileService.updateUser(USER_ID,
