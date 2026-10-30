@@ -4,7 +4,7 @@
 
 - A class that needs Docker (Testcontainers) is named `*IT` and runs in Failsafe (`integration-test` phase, after `package`); everything else is `*Test` and runs in Surefire. Failsafe is declared once in the root pom (configured by the Boot parent); Surefire needs no declaration. `./mvnw test` needs no Docker; `./mvnw verify` does.
 - Test classes sit in the package of the feature they test (`04-conventions.md`).
-- Names are `method_scenario_outcome`. Shared fixtures: `UserFixtures`, `JwtFixtures` (personas Arthur Morgan, Leon Kennedy, John Marston, Jack Carver, Jason Brody). Explicit imports, explanatory comments. Every timestamp is an `Instant`; JDBC parameters go through `testsupport/data/JdbcParameters.bindable(...)`, which converts at the boundary.
+- Names are `method_scenario_outcome`. Shared fixtures: `UserFixtures`, `JwtFixtures` (personas Arthur Morgan, Leon Kennedy, John Marston, Jack Carver, Jason Brody), `testsupport/web/Route` (the API's routes: method, path, success status). Explicit imports, explanatory comments. Every timestamp is an `Instant`; JDBC parameters go through `testsupport/data/JdbcParameters.bindable(...)`, which converts at the boundary.
 - **Verify behaviour empirically.** Run it; mutation-check a test by breaking the code it guards, confirming the test fails, then restoring the file byte for byte. A test that cannot fail proves nothing.
 - Use `Locale.ROOT` where case matters (`05-framework-and-tooling-gotchas.md`).
 

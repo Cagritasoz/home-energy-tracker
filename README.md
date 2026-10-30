@@ -18,7 +18,7 @@ Smart meters and plugs report how much energy they have used. This system ingest
 
 | Service | Purpose | Port | Status |
 |---|---|---|---|
-| **user-service** | User accounts, profile, GDPR-style account deletion, user events | 8081 | **Implemented**, see below. Account deletion is partly done |
+| **user-service** | User accounts, profile, GDPR-style account deletion, user events | 8081 | **Implemented**, see below. Account deletion is complete on this side; no participant service exists yet |
 | device-service | Device registry, per-device tokens, device events | 8081 | Prototype exists, **to be rebuilt next** |
 | ingestion-service | Receives readings from devices and publishes them to Kafka | 8082 | Prototype exists, to be rebuilt |
 | usage-service | Turns readings into consumption data in InfluxDB | 8083 | Prototype exists, to be rebuilt |
@@ -215,7 +215,7 @@ user-service has more than 1,100 test cases. Highlights:
 
 - **Security tests** against the real security configuration: real RS256-signed tokens with keys served from a local JWKS endpoint, a role matrix of 14 token shapes across every route, forged, unsigned, expired and wrong-audience tokens, CORS, method security in isolation, key rotation and key-endpoint outages, and an integration test proving an admin account never gets a user row or an event. The security classes have 100 % line and branch coverage.
 
-Not written yet: the remaining concurrency tests of the deletion saga and cross-service end-to-end tests (the `e2e/` module is a stub).
+Not written yet: cross-service end-to-end tests (the `e2e/` module is a stub).
 
 ---
 
@@ -224,7 +224,7 @@ Not written yet: the remaining concurrency tests of the deletion saga and cross-
 The three prototype services (`device-service`, `ingestion-service`, `usage-service`) work end to end, but they predate the design and take shortcuts. For example, ingestion publishes per-tick deltas where a real meter reports a cumulative counter, and device ids are shared through a polled cache. They will be **rebuilt**, not extended, after user-service is complete.
 
 ### device-service (prototype, rebuild next)
-Owns devices: who has which meter, registration, and the per-device tokens that IoT hardware uses to authenticate. Publishes `device.events.v1` and a compacted `device.registry.v1` topic that ingestion uses to validate tokens without calling this service. Reacts to `UserDeletionRequested` by deleting the user's devices and answering with `UserDevicesUnclaimed`, which is the other half of the deletion saga.
+Owns devices: who has which meter, registration, and the per-device tokens that IoT hardware uses to authenticate. Publishes `device.events.v1` and a compacted `device.registry.v1` topic that ingestion uses to validate tokens without calling this service. Reacts to `UserDeletionStarted` by deleting the user's devices and answering with `UserDevicesUnclaimed`, which is the other half of the deletion saga.
 
 ### ingestion-service (prototype)
 The front door for IoT devices. Authenticates a device by its token (checked against the registry topic), validates the reading and publishes it to `energy.readings.v1`. Readings carry the **cumulative meter value** (`energy_total_kwh`) and the owning user id.
@@ -249,7 +249,7 @@ Spring Cloud Gateway in front of everything: routing, JWT validation, rate limit
 ## Repository layout
 
 ```
-contracts/            Shared event contracts (envelope, headers, user events). Plain jar, no Spring.
+contracts/            Shared event contracts (envelope, headers, user and device events). Plain jar, no Spring.
 services/
   user-service/       The finished reference service
   device-service/     Prototype

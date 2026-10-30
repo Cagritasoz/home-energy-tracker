@@ -25,7 +25,7 @@ A service is organised by feature, not by layer (user-service since the restruct
 
 - A class is named for what it does (`UserProfileService`, not `UserService`), and a controller serves one feature's routes.
 - Tests mirror the main packages: a class's test sits in its package, so package-private members stay reachable. A test that exercises a feature end to end sits with that feature, not with the layer it passes through (a deletion flow test is in `deletion/`, not `security/`).
-- Shared test helpers live in `testsupport/<kind>/` (`containers`, `keycloak`, `jwt`, `data`).
+- A test helper used by more than one feature's tests lives in `testsupport/<kind>/` (`containers`, `data`, `jwt`, `kafka`, `keycloak`, `web`); a helper only one feature uses stays in that feature's package (`DeletionSagaFlowSupport`; `SecuritySliceTest` is the security slice, which the interceptor's wiring test in `provisioning` also runs in).
 - Moves are done with `git mv` and as their own commit, so `git log --follow` keeps working.
 
 ## Entities
