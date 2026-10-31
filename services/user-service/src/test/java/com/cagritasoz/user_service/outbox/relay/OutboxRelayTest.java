@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.outbox.relay;
 
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -219,7 +220,10 @@ class OutboxRelayTest {
 
     private OutboxRelay newRelay(int maxBatchesPerTick) {
 
-        return new OutboxRelay(publisher, meters, maxBatchesPerTick, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, () -> nowNanos);
+        return new OutboxRelay(publisher, meters,
+                ConfigFixtures.outbox("relay.max-batches-per-tick=" + maxBatchesPerTick,
+                        "relay.backoff.initial-ms=" + INITIAL_BACKOFF_MS, "relay.backoff.max-ms=" + MAX_BACKOFF_MS),
+                () -> nowNanos);
 
     }
 

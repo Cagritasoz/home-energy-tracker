@@ -49,7 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.user.deletion.keycloak.interval-ms=86400000",
         "app.keycloak.admin.client-secret=flow-test-secret",
         "app.keycloak.admin.read-timeout=1s",
-        "app.keycloak.admin.retry.wait=20ms"
+        "app.keycloak.admin.retry.wait-duration=20ms"
 })
 @AutoConfigureMockMvc
 @Import(PostgresTestContainerConfig.class)

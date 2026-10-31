@@ -1,7 +1,8 @@
 package com.cagritasoz.user_service.deletion.ack;
 
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.convert.ApplicationConversionService;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.util.List;
@@ -18,25 +19,32 @@ class RequiredParticipantsValidatorTest {
             new ParticipantAck("devices", "device.events.v1", "UserDevicesUnclaimed", 1),
             new ParticipantAck("usage", "usage.events.v1", "UserReadingsDeleted", 1)));
 
+    private static RequiredParticipantsValidator validator(String... required) {
+
+        return new RequiredParticipantsValidator(
+                ConfigFixtures.deletion("required-participants=" + String.join(",", required)), ACKS);
+
+    }
+
     @Test
     void constructor_emptySet_isFine() {
 
-        assertThatCode(() -> new RequiredParticipantsValidator(List.of(), ACKS)).doesNotThrowAnyException();
+        assertThatCode(RequiredParticipantsValidatorTest::validator).doesNotThrowAnyException();
 
     }
 
     @Test
     void constructor_everyNameHasAHandler_isFine() {
 
-        assertThatCode(() -> new RequiredParticipantsValidator(List.of("devices"), ACKS)).doesNotThrowAnyException();
-        assertThatCode(() -> new RequiredParticipantsValidator(List.of("usage", "devices"), ACKS)).doesNotThrowAnyException();
+        assertThatCode(() -> validator("devices")).doesNotThrowAnyException();
+        assertThatCode(() -> validator("usage", "devices")).doesNotThrowAnyException();
 
     }
 
     @Test
     void constructor_nameWithoutAHandler_refusesAndNamesIt() {
 
-        assertThatThrownBy(() -> new RequiredParticipantsValidator(List.of("devices", "device"), ACKS))
+        assertThatThrownBy(() -> validator("devices", "device"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("app.user.deletion.required-participants")
                 .hasMessageContaining("[device]")
@@ -47,7 +55,7 @@ class RequiredParticipantsValidatorTest {
     @Test
     void constructor_everyNameUnknown_namesAllOfThem() {
 
-        assertThatThrownBy(() -> new RequiredParticipantsValidator(List.of("alerts", "notifications"), ACKS))
+        assertThatThrownBy(() -> validator("alerts", "notifications"))
                 .hasMessageContaining("alerts").hasMessageContaining("notifications");
 
     }
@@ -57,10 +65,10 @@ class RequiredParticipantsValidatorTest {
     @Test
     void application_startsWithADeviceRequiredAndFailsOnATypo() {
 
-        // Boot's conversion service, which the application has and a bare runner does not: it is what turns an empty
-        // property into an empty list instead of a list holding one empty string.
+        // application.yaml is loaded the way the application loads it, so the rest of DeletionProperties is there and
+        // only the list under test is overridden.
         ApplicationContextRunner runner = new ApplicationContextRunner()
-                .withInitializer(context -> context.getBeanFactory().setConversionService(ApplicationConversionService.getSharedInstance()))
+                .withInitializer(new ConfigDataApplicationContextInitializer())
                 .withUserConfiguration(ParticipantAcksConfig.class, RequiredParticipantsValidator.class);
 
         runner.withPropertyValues("app.user.deletion.required-participants=devices")

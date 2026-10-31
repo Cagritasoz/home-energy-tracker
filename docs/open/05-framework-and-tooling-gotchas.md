@@ -12,6 +12,11 @@ Verified in this repository. Check here before assuming a library behaves the wa
 - `wiremock-standalone` is a test dependency (version is a root property): its shaded Jetty and Jackson cannot clash with Boot's Tomcat and Jackson 3.
 - Spring Kafka's default dead-letter topic is `<topic>-dlt`; our topics use `<topic>.dlt`, so consumers need a custom destination resolver.
 - With Spring, a `@SpringBootTest` that keeps a fast scheduler must not stay in the context cache: a cached context keeps its jobs ticking against the shared database. Such tests use `@DirtiesContext(AFTER_CLASS)`.
+- `@ConfigurationProperties` binding is lenient about placeholders: `@Value("${X}")` fails the start-up when `X` is unresolved, but a bound value keeps the text `${X}`. A required secret needs its own check (`KeycloakAdminProperties.clientSecret` rejects a value starting with `${`).
+- Relaxed binding ignores dashes and case, so `batchsize` and `batch-size` are the same key (a typo test needs another spelling). A record component cannot be called `wait` (`Object.wait()`): the Keycloak retry's key is `wait-duration`. `@ConfigurationProperties(ignoreUnknownFields = false)` is what turns a misspelled key into a failed start; Boot ignores it by default.
+- Bean Validation's default messages follow the JVM's locale (they come out Turkish on the author's machine), so tests of a refused setting assert the constraint's name (`Positive`, `NotBlank`), or a message the record sets itself, never a default text. Boot names the rejected field as the record spells it (`promoter.batchSize`), not as the key is written.
+- `@ConfigurationPropertiesScan` on the application class would also run in every slice test (`@DataJpaTest`, `@WebMvcTest`) and bind records whose settings the slice does not have; each class registers its record with `@EnableConfigurationProperties`.
+- `ConfigDataApplicationContextInitializer` (loads `application.yaml` into an `ApplicationContextRunner`) is `org.springframework.boot.test.context.ConfigDataApplicationContextInitializer` in Boot 4.
 
 ## Jackson 3
 

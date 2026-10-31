@@ -3,7 +3,7 @@ package com.cagritasoz.user_service.deletion;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -20,6 +20,7 @@ import java.util.UUID;
 // same tick; the compare-and-set inside finalizeDeletion() lets exactly one of them finish each account.
 @Slf4j
 @Component
+@EnableConfigurationProperties(DeletionProperties.class)
 public class DeletionFinalizationJob {
 
     private final DeletionFinalizationService finalizationService;
@@ -32,16 +33,10 @@ public class DeletionFinalizationJob {
 
     public DeletionFinalizationJob(DeletionFinalizationService finalizationService,
                                    MeterRegistry meterRegistry,
-                                   @Value("${app.user.deletion.finalizer.batch-size}") int batchSize) {
-
-        if (batchSize < 1) {
-
-            throw new IllegalArgumentException("app.user.deletion.finalizer.batch-size must be at least 1 but was " + batchSize);
-
-        }
+                                   DeletionProperties properties) {
 
         this.finalizationService = finalizationService;
-        this.batchSize = batchSize;
+        this.batchSize = properties.finalizer().batchSize();
         this.finalizedCounter = Counter.builder("user.deletion.finalized")
                 .description("Accounts moved from DELETING to DELETED by this instance")
                 .register(meterRegistry);

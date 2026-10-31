@@ -1,9 +1,8 @@
 package com.cagritasoz.user_service.consumer;
 
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -27,17 +26,8 @@ class ProcessedEventsPurgeJobTest {
     private ProcessedEvents processedEvents;
 
     private ProcessedEventsPurgeJob job() {
-        return new ProcessedEventsPurgeJob(processedEvents, RETENTION_DAYS, BATCH_SIZE);
-    }
-
-    @ParameterizedTest
-    @CsvSource({"0, 100", "-1, 100", "30, 0", "30, -5"})
-    void constructor_retentionOrBatchBelowOne_refusesToStart(int retentionDays, int batchSize) {
-
-        assertThatThrownBy(() -> new ProcessedEventsPurgeJob(processedEvents, retentionDays, batchSize))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("app.processed-events.purge");
-
+        return new ProcessedEventsPurgeJob(processedEvents,
+                ConfigFixtures.processedEvents("purge.retention-days=" + RETENTION_DAYS, "purge.batch-size=" + BATCH_SIZE));
     }
 
     // One call, and it was short: nothing older is left, so no second call.

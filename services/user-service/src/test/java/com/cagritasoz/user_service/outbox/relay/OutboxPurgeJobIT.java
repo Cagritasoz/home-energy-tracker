@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.outbox.relay;
 
 import com.cagritasoz.user_service.outbox.OutboxRepository;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.data.JdbcParameters;
 import org.junit.jupiter.api.Test;
@@ -39,6 +40,13 @@ class OutboxPurgeJobIT {
     @Autowired
     private JdbcTemplate jdbc;
 
+    private OutboxPurgeJob purgeJob() {
+
+        return new OutboxPurgeJob(outboxRepository,
+                ConfigFixtures.outbox("purge.retention-days=" + RETENTION_DAYS, "purge.batch-size=" + BATCH_SIZE));
+
+    }
+
     @Test
     void purge_oldPublishedRows_areDeletedAcrossSeveralBatchesAndNothingElseIsTouched() {
 
@@ -52,7 +60,7 @@ class OutboxPurgeJobIT {
         long oldPending = insertEvent(dbNow.minus(30, ChronoUnit.DAYS), null, false); // never published: not eligible
         long parked = insertEvent(dbNow.minus(30, ChronoUnit.DAYS), null, true);
 
-        new OutboxPurgeJob(outboxRepository, RETENTION_DAYS, BATCH_SIZE).purge();
+        purgeJob().purge();
 
         assertThat(remainingSeqs()).containsExactly(recentPublished, oldPending, parked);
 
@@ -65,7 +73,7 @@ class OutboxPurgeJobIT {
         assert dbNow != null;
         insertEvent(null, dbNow.minus(9, ChronoUnit.DAYS), false);
         long recentPublished = insertEvent(null, dbNow.minus(1, ChronoUnit.DAYS), false);
-        OutboxPurgeJob purgeJob = new OutboxPurgeJob(outboxRepository, RETENTION_DAYS, BATCH_SIZE);
+        OutboxPurgeJob purgeJob = purgeJob();
 
         purgeJob.purge();
         purgeJob.purge();

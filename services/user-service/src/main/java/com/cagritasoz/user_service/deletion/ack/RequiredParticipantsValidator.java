@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.deletion.ack;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.cagritasoz.user_service.deletion.DeletionProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -11,14 +12,14 @@ import java.util.List;
 // deletion's participant rows, nobody would ever confirm it, and every deletion would wait forever. A failed start is
 // far cheaper than that.
 //
-// The name's format and duplicates are checked by DeletionPromotionService, which owns the list's use.
+// The name's format and duplicates are checked when DeletionProperties is bound.
 @Component
+@EnableConfigurationProperties(DeletionProperties.class)
 public class RequiredParticipantsValidator {
 
-    public RequiredParticipantsValidator(@Value("${app.user.deletion.required-participants:}") List<String> required,
-                                         ParticipantAcks acks) {
+    public RequiredParticipantsValidator(DeletionProperties properties, ParticipantAcks acks) {
 
-        List<String> unknown = new ArrayList<>(required);
+        List<String> unknown = new ArrayList<>(properties.requiredParticipants());
         unknown.removeAll(acks.participants());
 
         if (!unknown.isEmpty()) {

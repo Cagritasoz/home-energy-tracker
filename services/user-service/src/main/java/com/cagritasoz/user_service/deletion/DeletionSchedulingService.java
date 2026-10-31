@@ -6,7 +6,7 @@ import com.cagritasoz.user_service.user.User;
 import com.cagritasoz.user_service.user.UserNotFoundException;
 import com.cagritasoz.user_service.user.UserRepository;
 import com.cagritasoz.user_service.user.UserResponse;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +22,7 @@ import java.util.UUID;
 // re-reads the row to tell "already in the state you asked for" (a successful repeat) from "too late" or "no such
 // account".
 @Service
+@EnableConfigurationProperties(DeletionProperties.class)
 public class DeletionSchedulingService {
 
     private final UserRepository userRepository;
@@ -32,19 +33,11 @@ public class DeletionSchedulingService {
 
     public DeletionSchedulingService(UserRepository userRepository,
                                OutboxService outboxService,
-                               @Value("${app.user.deletion.grace}") Duration grace) {
-
-        // Zero or negative would make an account deletable at once while the API still promises a cancel window,
-        // so a configuration mistake fails the start instead of silently removing the grace period.
-        if (grace.isZero() || grace.isNegative()) {
-
-            throw new IllegalArgumentException("app.user.deletion.grace must be positive but was " + grace);
-
-        }
+                               DeletionProperties properties) {
 
         this.userRepository = userRepository;
         this.outboxService = outboxService;
-        this.grace = grace;
+        this.grace = properties.grace();
     }
 
     // Idempotent: a repeat while the deletion is already scheduled answers the same deadline and writes no event.

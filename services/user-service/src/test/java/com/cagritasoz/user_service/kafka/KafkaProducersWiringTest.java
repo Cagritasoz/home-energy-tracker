@@ -9,12 +9,12 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.config.SslConfigs;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.autoconfigure.context.PropertyPlaceholderAutoConfiguration;
 import org.springframework.boot.kafka.autoconfigure.DefaultKafkaProducerFactoryCustomizer;
 import org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.SslBundleSslEngineFactory;
 import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaOperations;
@@ -40,10 +40,8 @@ import static org.mockito.Mockito.mock;
 // listener, and each user must get the right one by name.
 class KafkaProducersWiringTest {
 
-    // PropertyPlaceholderAutoConfiguration is what an application has and a bare runner lacks: the strict resolver that
-    // fails the start-up on an @Value whose key is missing (without it the placeholder text itself would be injected).
     private final ApplicationContextRunner withoutClientIds = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(PropertyPlaceholderAutoConfiguration.class, KafkaAutoConfiguration.class))
+            .withConfiguration(AutoConfigurations.of(KafkaAutoConfiguration.class))
             .withUserConfiguration(KafkaProducerConfig.class)
             .withPropertyValues(
                     "spring.kafka.bootstrap-servers=localhost:1",
@@ -234,7 +232,7 @@ class KafkaProducersWiringTest {
 
         runner.withBean(OutboxRepository.class, () -> mock(OutboxRepository.class))
                 .withUserConfiguration(OutboxBatchPublisher.class)
-                .withPropertyValues("app.outbox.relay.batch-size=50", "app.outbox.relay.send-timeout-ms=5000")
+                .withInitializer(new ConfigDataApplicationContextInitializer()) // the rest of OutboxProperties, from application.yaml
                 .run(context -> {
 
                     assertThat(ReflectionTestUtils.getField(context.getBean(OutboxBatchPublisher.class), "kafkaTemplate"))

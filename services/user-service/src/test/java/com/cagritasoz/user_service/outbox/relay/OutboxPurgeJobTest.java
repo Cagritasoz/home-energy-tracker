@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.outbox.relay;
 
 import com.cagritasoz.user_service.outbox.OutboxRepository;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,7 +34,8 @@ class OutboxPurgeJobTest {
     @BeforeEach
     void setUp() {
 
-        purgeJob = new OutboxPurgeJob(outboxRepository, RETENTION_DAYS, BATCH_SIZE);
+        purgeJob = new OutboxPurgeJob(outboxRepository,
+                ConfigFixtures.outbox("purge.retention-days=" + RETENTION_DAYS, "purge.batch-size=" + BATCH_SIZE));
 
     }
 

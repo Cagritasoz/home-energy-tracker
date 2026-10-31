@@ -2,12 +2,13 @@ package com.cagritasoz.user_service.outbox.relay;
 
 import com.cagritasoz.user_service.outbox.OutboxRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
+@EnableConfigurationProperties(OutboxProperties.class)
 public class OutboxPurgeJob {
 
     private final OutboxRepository outboxRepository;
@@ -16,12 +17,10 @@ public class OutboxPurgeJob {
 
     private final int batchSize;
 
-    public OutboxPurgeJob(OutboxRepository outboxRepository,
-                          @Value("${app.outbox.purge.retention-days}") int retentionDays,
-                          @Value("${app.outbox.purge.batch-size}") int batchSize) {
+    public OutboxPurgeJob(OutboxRepository outboxRepository, OutboxProperties properties) {
         this.outboxRepository = outboxRepository;
-        this.retentionDays = retentionDays;
-        this.batchSize = batchSize;
+        this.retentionDays = properties.purge().retentionDays();
+        this.batchSize = properties.purge().batchSize();
     }
 
     @Scheduled(cron = "${app.outbox.purge.cron}")

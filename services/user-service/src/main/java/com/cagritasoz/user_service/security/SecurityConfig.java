@@ -1,7 +1,8 @@
 package com.cagritasoz.user_service.security;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OAuth2ResourceServerProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -20,6 +21,7 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.util.Assert;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;
 
@@ -29,6 +31,7 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@EnableConfigurationProperties({SecurityProperties.class, OAuth2ResourceServerProperties.class})
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -38,14 +41,11 @@ public class SecurityConfig {
 
     private final ProblemDetailAccessDeniedHandler accessDeniedHandler;
 
-    @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
-    private String issuerUri;
+    private final SecurityProperties securityProperties;
 
-    @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}")
-    private String jwkSetUri;
-
-    @Value("${app.security.required-audience}")
-    private String requiredAudience;
+    // Spring Boot's own settings for a resource server (spring.security.oauth2.resourceserver.*); only the JWT's
+    // issuer and key set address are used.
+    private final OAuth2ResourceServerProperties resourceServerProperties;
 
 
     @Bean
@@ -100,6 +100,12 @@ public class SecurityConfig {
         // Keycloak down = bean creation failed and service could not start.
         // withJwkSetUri() no call to Keycloak is made in startup.
         // First request with token fetches the keys and caches them.
+        String jwkSetUri = resourceServerProperties.getJwt().getJwkSetUri();
+        String issuerUri = resourceServerProperties.getJwt().getIssuerUri();
+
+        Assert.hasText(jwkSetUri, "spring.security.oauth2.resourceserver.jwt.jwk-set-uri must be set");
+        Assert.hasText(issuerUri, "spring.security.oauth2.resourceserver.jwt.issuer-uri must be set");
+
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
 
         OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
@@ -107,7 +113,7 @@ public class SecurityConfig {
         // Clock skew of 50 seconds instead of the default 60 seconds.
         // OAuth2TokenValidator<Jwt> timestampValidator = new JwtTimestampValidator(Duration.ofSeconds(50));
 
-        OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(requiredAudience);
+        OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(securityProperties.requiredAudience());
 
         // Plug in the custom audience validator with default validators.
         decoder.setJwtValidator(
@@ -135,7 +141,7 @@ public class SecurityConfig {
 
         CorsConfiguration config = new CorsConfiguration();
 
-        config.setAllowedOrigins(List.of("http://localhost:3000")); // React frontend (even though it does not exist lol)
+        config.setAllowedOrigins(securityProperties.cors().allowedOrigins());
 
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
 

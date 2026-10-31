@@ -25,7 +25,7 @@ A service is organised by feature, not by layer (user-service since the restruct
 
 - A class is named for what it does (`UserProfileService`, not `UserService`), and a controller serves one feature's routes.
 - Tests mirror the main packages: a class's test sits in its package, so package-private members stay reachable. A test that exercises a feature end to end sits with that feature, not with the layer it passes through (a deletion flow test is in `deletion/`, not `security/`).
-- A test helper used by more than one feature's tests lives in `testsupport/<kind>/` (`containers`, `data`, `jwt`, `kafka`, `keycloak`, `web`); a helper only one feature uses stays in that feature's package (`DeletionSagaFlowSupport`; `SecuritySliceTest` is the security slice, which the interceptor's wiring test in `provisioning` also runs in).
+- A test helper used by more than one feature's tests lives in `testsupport/<kind>/` (`config`, `containers`, `data`, `jwt`, `kafka`, `keycloak`, `web`); a helper only one feature uses stays in that feature's package (`DeletionSagaFlowSupport`; `SecuritySliceTest` is the security slice, which the interceptor's wiring test in `provisioning` also runs in).
 - Moves are done with `git mv` and as their own commit, so `git log --follow` keeps working.
 
 ## Entities
@@ -54,7 +54,14 @@ Why: `docs/design/01-outbox-design.md`, section 4.
 
 ## Configuration
 
-`@Value` goes into `@Bean` methods or constructor parameters, not onto a `final` field with `@RequiredArgsConstructor` (Lombok does not copy the annotation to the constructor parameter; Spring then looks for a bean of the field's type). Secrets come only from environment variables. `application.yaml` uses spaces only (YAML forbids tabs) and explains every setting in a comment.
+Settings are read through `@ConfigurationProperties` records, one per feature prefix, in the package of the feature they configure: `OutboxProperties` (`app.outbox`), `ProcessedEventsProperties`, `DeletionProperties` (`app.user.deletion`), `KeycloakAdminProperties`, `SecurityProperties` and `KafkaClientIdProperties`. There is no `@Value` in the main code.
+
+- **Validated, strictly.** Each record is `@Validated` with Bean Validation on its fields (`@Positive`, `@NotBlank`, `@DurationMin`) and has `ignoreUnknownFields = false`, so a missing, out-of-range or misspelled setting stops the start-up and names the field. The records have no defaults: `application.yaml` holds every value, with a comment per setting. Validation that belongs to the value itself lives in the record (a grace period must be positive, a participant name must match the table's rule); a rule that needs another bean (the required participants must each have an ack handler) stays in the bean that owns it (`RequiredParticipantsValidator`).
+- **Registered where used.** A class that needs a record registers it with `@EnableConfigurationProperties(X.class)` on itself, so importing the class alone is enough in a slice test. A global `@ConfigurationPropertiesScan` would bind every record in every slice test, the Keycloak secret among them.
+- **Annotations read the key too.** `@Scheduled` and a listener's `autoStartup` take a placeholder, not a bean, so they read `${app.…}` themselves. The same key is a field of its record, so that it is validated at start-up like the rest.
+- **Names.** A field is named after its key (`wait-duration`, not `wait`: a record component cannot be called `wait`, which is `Object.wait()`). Durations are `Duration` (`5m`, `200ms`); the keys that end in `-ms` are plain numbers of milliseconds.
+- **Secrets** come only from environment variables, and a binding keeps an unresolved `${X}` as plain text (`05-framework-and-tooling-gotchas.md`), so a secret's field also rejects a value that starts with `${`.
+- `application.yaml` uses spaces only (YAML forbids tabs) and explains every setting in a comment.
 
 ## Logging
 

@@ -3,15 +3,12 @@ package com.cagritasoz.user_service.deletion;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.user.User;
 import com.cagritasoz.user_service.user.UserRepository;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 // The promoter's work: turn an account whose grace period is over from DELETION_SCHEDULED into DELETING. It is the
 // point of no return - from here on nothing cancels it, the personal data is scrubbed, and every service that holds
@@ -22,11 +19,8 @@ import java.util.regex.Pattern;
 // there is no step that can half-fail. The job that drives it is a separate bean (DeletionPromotionJob): this
 // class's methods are @Transactional, and a call from inside the same object would skip the proxy.
 @Service
+@EnableConfigurationProperties(DeletionProperties.class)
 public class DeletionPromotionService {
-
-    // The same rule as the table's chk_user_deletion_participants_name, checked here as well on purpose: a name the
-    // table rejects would fail every promotion, forever, on the first row that reaches it.
-    private static final Pattern PARTICIPANT_NAME = Pattern.compile("^[a-z][a-z0-9_-]{0,62}$");
 
     private final UserRepository userRepository;
 
@@ -34,39 +28,21 @@ public class DeletionPromotionService {
 
     private final OutboxService outboxService;
 
-    // The services that must confirm the cleanup of every deletion that starts from now on. Read once at start-up:
-    // the set a deletion gets is the one in force at its promotion, copied into rows, so changing the configuration
-    // later never rewrites a deletion already running. Empty until a participant service exists.
+    // The services that must confirm the cleanup of every deletion that starts from now on. Read once at start-up
+    // (DeletionProperties checks each name and that none is listed twice): the set a deletion gets is the one in force
+    // at its promotion, copied into rows, so changing the configuration later never rewrites a deletion already
+    // running. Empty until a participant service exists.
     private final List<String> requiredParticipants;
 
     public DeletionPromotionService(UserRepository userRepository,
                                     UserDeletionParticipantRepository participantRepository,
                                     OutboxService outboxService,
-                                    @Value("${app.user.deletion.required-participants:}") List<String> requiredParticipants) {
-
-        Set<String> seen = new HashSet<>();
-
-        for (String name : requiredParticipants) {
-
-            if (!PARTICIPANT_NAME.matcher(name).matches()) {
-
-                throw new IllegalArgumentException("app.user.deletion.required-participants has an invalid name '" + name
-                        + "': it must match " + PARTICIPANT_NAME.pattern());
-
-            }
-
-            if (!seen.add(name)) {
-
-                throw new IllegalArgumentException("app.user.deletion.required-participants lists '" + name + "' twice");
-
-            }
-
-        }
+                                    DeletionProperties properties) {
 
         this.userRepository = userRepository;
         this.participantRepository = participantRepository;
         this.outboxService = outboxService;
-        this.requiredParticipants = List.copyOf(requiredParticipants);
+        this.requiredParticipants = List.copyOf(properties.requiredParticipants());
 
     }
 

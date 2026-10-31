@@ -6,7 +6,7 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -16,46 +16,35 @@ import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
 
-// Builds the Keycloak admin client from app.keycloak.admin.* and gives the circuit breaker a gauge.
+// Builds the Keycloak admin client from app.keycloak.admin.* (KeycloakAdminProperties) and gives the circuit breaker a gauge.
 //
 // The pieces are static factory methods as well as beans so that a test can assemble the same client against a fake
 // server with its own timeouts and breaker settings, instead of repeating this wiring.
 @Configuration
+@EnableConfigurationProperties(KeycloakAdminProperties.class)
 public class KeycloakAdminConfig {
 
     @Bean
-    public CircuitBreaker keycloakAdminCircuitBreaker(
-            @Value("${app.keycloak.admin.circuit-breaker.sliding-window-size}") int slidingWindowSize,
-            @Value("${app.keycloak.admin.circuit-breaker.minimum-calls}") int minimumCalls,
-            @Value("${app.keycloak.admin.circuit-breaker.failure-rate-threshold}") float failureRateThreshold,
-            @Value("${app.keycloak.admin.circuit-breaker.wait-in-open-state}") Duration waitInOpenState,
-            @Value("${app.keycloak.admin.circuit-breaker.half-open-calls}") int halfOpenCalls) {
+    public CircuitBreaker keycloakAdminCircuitBreaker(KeycloakAdminProperties properties) {
 
-        return circuitBreaker(slidingWindowSize, minimumCalls, failureRateThreshold, waitInOpenState, halfOpenCalls);
+        KeycloakAdminProperties.CircuitBreaker breaker = properties.circuitBreaker();
+
+        return circuitBreaker(breaker.slidingWindowSize(), breaker.minimumCalls(), breaker.failureRateThreshold(),
+                breaker.waitInOpenState(), breaker.halfOpenCalls());
 
     }
 
     @Bean
-    public KeycloakAdmin keycloakAdmin(
-            CircuitBreaker keycloakAdminCircuitBreaker,
-            @Value("${app.keycloak.admin.base-url}") String baseUrl,
-            @Value("${app.keycloak.admin.realm}") String realm,
-            @Value("${app.keycloak.admin.client-id}") String clientId,
-            @Value("${app.keycloak.admin.client-secret}") String clientSecret,
-            @Value("${app.keycloak.admin.connect-timeout}") Duration connectTimeout,
-            @Value("${app.keycloak.admin.read-timeout}") Duration readTimeout,
-            @Value("${app.keycloak.admin.token-refresh-margin}") Duration tokenRefreshMargin,
-            @Value("${app.keycloak.admin.retry.max-attempts}") int retryMaxAttempts,
-            @Value("${app.keycloak.admin.retry.wait}") Duration retryWait) {
+    public KeycloakAdmin keycloakAdmin(CircuitBreaker keycloakAdminCircuitBreaker, KeycloakAdminProperties properties) {
 
         return new KeycloakAdminRestClient(
-                restClient(baseUrl, connectTimeout, readTimeout),
+                restClient(properties.baseUrl(), properties.connectTimeout(), properties.readTimeout()),
                 keycloakAdminCircuitBreaker,
-                retry(retryMaxAttempts, retryWait),
-                realm,
-                clientId,
-                clientSecret,
-                tokenRefreshMargin,
+                retry(properties.retry().maxAttempts(), properties.retry().waitDuration()),
+                properties.realm(),
+                properties.clientId(),
+                properties.clientSecret(),
+                properties.tokenRefreshMargin(),
                 Clock.systemUTC());
 
     }

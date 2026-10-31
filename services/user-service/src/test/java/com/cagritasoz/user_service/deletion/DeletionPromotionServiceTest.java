@@ -1,14 +1,13 @@
 package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import com.cagritasoz.user_service.user.User;
 import com.cagritasoz.user_service.user.UserRepository;
 import com.cagritasoz.user_service.user.UserStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -20,7 +19,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -50,7 +48,8 @@ class DeletionPromotionServiceTest {
     private OutboxService outboxService;
 
     private DeletionPromotionService service(String... requiredParticipants) {
-        return new DeletionPromotionService(userRepository, participantRepository, outboxService, List.of(requiredParticipants));
+        return new DeletionPromotionService(userRepository, participantRepository, outboxService,
+                ConfigFixtures.deletion("required-participants=" + String.join(",", requiredParticipants)));
     }
 
     private User promotedUser() {
@@ -63,51 +62,6 @@ class DeletionPromotionServiceTest {
                 .deletionScheduledFor(Instant.parse("2026-01-31T23:55:00Z"))
                 .deletionStartedAt(Instant.parse("2026-01-31T23:55:02Z"))
                 .build();
-    }
-
-    // --- the required set is validated when the service starts
-
-    @ParameterizedTest
-    @ValueSource(strings = {"Devices", "devices ", " devices", "dev ices", "1devices", "_devices", "-devices", "dev.ices", "dev/ices", "dévices", ""})
-    void constructor_nameTheTableWouldReject_refusesToStart(String name) {
-
-        // Without this check the first promotion would fail on chk_user_deletion_participants_name, and so would
-        // every later one, because the failing account is always first in line.
-        assertThatThrownBy(() -> service(name))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("app.user.deletion.required-participants");
-
-    }
-
-    @Test
-    void constructor_nameLongerThanTheTableAllows_refusesToStart() {
-
-        assertThatThrownBy(() -> service("a".repeat(64))).isInstanceOf(IllegalArgumentException.class);
-
-    }
-
-    @Test
-    void constructor_nameAtTheLongestLengthTheTableAllows_isAccepted() {
-
-        assertThatCode(() -> service("a".repeat(63))).doesNotThrowAnyException();
-
-    }
-
-    @Test
-    void constructor_sameNameTwice_refusesToStart() {
-
-        assertThatThrownBy(() -> service("devices", "usage", "devices"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("devices");
-
-    }
-
-    @Test
-    void constructor_emptySetAndValidNames_areAccepted() {
-
-        assertThatCode(this::service).doesNotThrowAnyException();
-        assertThatCode(() -> service("devices", "usage-service", "alert_rules", "a1")).doesNotThrowAnyException();
-
     }
 
     // --- the work list
@@ -196,9 +150,12 @@ class DeletionPromotionServiceTest {
     @Test
     void promote_listHandedToTheConstructorIsCopied_laterChangesToItDoNotMatter() {
 
+        DeletionProperties yaml = ConfigFixtures.deletion();
         List<String> configured = new ArrayList<>(List.of("devices"));
+        DeletionProperties properties = new DeletionProperties(yaml.grace(), yaml.quietPeriod(), configured,
+                yaml.promoter(), yaml.keycloak(), yaml.finalizer(), yaml.ackConsumer());
         DeletionPromotionService service =
-                new DeletionPromotionService(userRepository, participantRepository, outboxService, configured);
+                new DeletionPromotionService(userRepository, participantRepository, outboxService, properties);
         configured.add("usage");
         when(userRepository.promoteDeletion(USER_ID)).thenReturn(1);
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(promotedUser()));

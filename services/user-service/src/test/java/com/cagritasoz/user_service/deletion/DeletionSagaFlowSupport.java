@@ -47,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.user.deletion.quiet-period=2s",
         "app.keycloak.admin.client-secret=saga-test-secret",
         "app.keycloak.admin.read-timeout=1s",
-        "app.keycloak.admin.retry.wait=20ms",
+        "app.keycloak.admin.retry.wait-duration=20ms",
         "app.keycloak.admin.circuit-breaker.sliding-window-size=4",
         "app.keycloak.admin.circuit-breaker.minimum-calls=4",
         "app.keycloak.admin.circuit-breaker.wait-in-open-state=1s",
