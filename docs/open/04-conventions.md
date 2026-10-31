@@ -11,7 +11,7 @@ This is a learning project: heavy explanatory comments are intentional and are n
 - Flyway owns all DDL; `ddl-auto=validate`. Changes are new forward migrations, never edits to an applied `V` file (a comment change alters Flyway's checksum too).
 - Constraint and index names: `pk_`, `uq_`, `chk_`, `idx_` + `<table>_…`. `CURRENT_TIMESTAMP` over `now()`.
 - The database owns time (`created_at` default, a `BEFORE UPDATE` trigger for `updated_at`, mapped `@Generated` with `insertable/updatable = false`). The trigger leaves `version` alone, so native `UPDATE`s bump `version = version + 1` themselves. Other services adopt the same when rebuilt.
-- One concern per migration; each column explained in the migration's comments.
+- One concern per migration; a table is created whole, with its constraints and indexes, so it reads in one place; each column is explained in the migration's comments.
 
 ## State transitions
 

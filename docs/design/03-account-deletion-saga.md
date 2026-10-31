@@ -58,29 +58,28 @@ stateDiagram-v2
 
 There is no way back from `DELETING`. The only undo is cancelling while the account is still `DELETION_SCHEDULED`.
 
-## 5. Schema (migrations V11–V14 on top of V1–V10)
+## 5. Schema
 
-Four migrations, one concern each: `V11__users_add_deletion_schedule_and_scheduled_status` (new columns, backfill, status and consistency checks, indexes), `V12__users_allow_keycloak_deleted_at_while_deleting`, `V13__create_user_deletion_participants_table`, `V14__users_drop_keycloak_disabled_at_and_devices_deleted`. They are applied.
+The saga's schema is part of the baseline: the columns and checks of `users` are in `V1`, and `user_deletion_participants` is `V4`.
 
-`users` (changes):
+`users`, the saga's part:
 
-- Status check gains `DELETION_SCHEDULED`.
-- `deletion_requested_at` (existing): when the user asked. Set when scheduled, cleared on cancel.
-- `deletion_scheduled_for` (new, `timestamptz`): the deadline. Set with the request, cleared on cancel, kept afterwards as history.
-- `deletion_started_at` (new): when the promoter moved the row to `DELETING`. It is the `occurredAt` of `UserDeletionStarted` (the generic `updated_at` moves on any later update, so it cannot serve).
-- `keycloak_deleted_at` (existing): when Keycloak confirmed the hard delete; now allowed on `DELETING` as well as `DELETED`.
-- Dropped: `keycloak_disabled_at` (the account is no longer disabled in Keycloak at any point; it is deleted) and `devices_deleted` (replaced by the participants table).
+- `status` is `ACTIVE`, `DELETION_SCHEDULED`, `DELETING` or `DELETED`.
+- `deletion_requested_at`: when the user asked. Set when scheduled, cleared on cancel.
+- `deletion_scheduled_for` (`timestamptz`): the deadline. Set with the request, cleared on cancel, kept afterwards as history.
+- `deletion_started_at`: when the promoter moved the row to `DELETING`. It is the `occurredAt` of `UserDeletionStarted` (the generic `updated_at` moves on any later update, so it cannot serve).
+- `keycloak_deleted_at`: when Keycloak confirmed the hard delete; allowed on `DELETING` as well as `DELETED`, because the Keycloak user is deleted while the row is `DELETING`.
+- The account is never disabled in Keycloak: it stays usable while the deletion is scheduled and is deleted during `DELETING`. The per-service cleanup state is the participants table below.
 - Constraints tie each timestamp to the statuses that imply it, so an impossible state cannot be stored:
   - `(status = 'ACTIVE') = (deletion_scheduled_for IS NULL)`
   - `(status = 'ACTIVE') = (deletion_requested_at IS NULL)`
   - `(status IN ('DELETING','DELETED')) = (deletion_started_at IS NOT NULL)`
-  - `(status = 'DELETED') = (deleted_at IS NOT NULL)` (existing)
+  - `(status = 'DELETED') = (deleted_at IS NOT NULL)`
   - `keycloak_deleted_at IS NULL OR status IN ('DELETING','DELETED')`
   - `deletion_scheduled_for >= deletion_requested_at` (equal means "delete now", used by admin-initiated deletion)
-- Indexes: `idx_users_deletion_scheduled (deletion_scheduled_for) WHERE status = 'DELETION_SCHEDULED'` (the promoter's scan) and `idx_users_deleting (deletion_started_at) WHERE status = 'DELETING'` (finalizer, Keycloak job, watchdog), both partial so they stay small whatever the number of accounts. The old `idx_users_deleting` on `deletion_requested_at` is replaced.
-- Backfill before the constraints go on: a row already in `DELETING` or `DELETED` gets `deletion_scheduled_for` and `deletion_started_at` equal to its `deletion_requested_at` (an immediate deletion; the `DELETED` rows need the value too, because the started-at rule covers them).
+- Indexes: `idx_users_deletion_scheduled (deletion_scheduled_for) WHERE status = 'DELETION_SCHEDULED'` (the promoter's scan) and `idx_users_deleting (deletion_started_at) WHERE status = 'DELETING'` (finalizer, Keycloak job, watchdog), both partial so they stay small whatever the number of accounts.
 
-`user_deletion_participants` (new):
+`user_deletion_participants`:
 
 ```sql
 CREATE TABLE user_deletion_participants (
@@ -92,9 +91,9 @@ CREATE TABLE user_deletion_participants (
 );
 ```
 
-One row per service that must confirm *this* deletion, written by the promoter in the same transaction that sets `DELETING`. A row is satisfied when `acked_at` or `waived_at` is set. See section 8.
+One row per service that must confirm *this* deletion, written by the promoter in the same transaction that sets `DELETING`. A row is satisfied when `acked_at` or `waived_at` is set; both are never set (`chk_user_deletion_participants_acked_or_waived`), and `participant` must match `^[a-z][a-z0-9_-]{0,62}$`. The partial index `idx_user_deletion_participants_pending` serves the watchdog. See section 8.
 
-`uq_users_email` (existing, partial on `status <> 'DELETED'`) is unchanged: the promoter scrubs the email to `deleted+<id>@invalid`, which is unique per id, so a scrubbed row never blocks a real address.
+`uq_users_email` (partial on `status <> 'DELETED'`): the promoter scrubs the email to `deleted+<id>@invalid`, which is unique per id, so a scrubbed row never blocks a real address.
 
 ## 6. HTTP contract (user-service)
 
@@ -510,7 +509,7 @@ Checked in step 5f against the real image and realm file by `KeycloakAdminClient
 
 The saga's code is in user-service's `deletion` package (scheduling, promotion, the Keycloak job, orphan email handling), `keycloak` (the admin client), `provisioning` (the status gate, the orphan collision), `outbox` (the events) and `admin` (the participant view); `docs/open/02-user-service-status.md` has the package table. The tests sit with their feature:
 
-- **Schema**: `UserSchemaIT` (every new check with an accepted and a rejected case built from a legal row of the status, both indexes), `UserDeletionParticipantsSchemaIT` (defaults, primary key, foreign key, name format, acked-or-waived, the ack `UPDATE`'s row counts, the partial index), `MigrationUpgradeIT` (a V10 database with `DELETING` and `DELETED` rows is backfilled, the old columns are gone).
+- **Schema**: `UserSchemaIT` (every new check with an accepted and a rejected case built from a legal row of the status, both indexes), `UserDeletionParticipantsSchemaIT` (defaults, primary key, foreign key, name format, acked-or-waived, the ack `UPDATE`'s row counts, the partial index).
 - **Scheduling, cancel and the HTTP contract**: `DeletionSchedulingServiceTest` (every row-count outcome of schedule and cancel: which event is written, which answer the caller gets, the grace validation), `DeletionStatusMatrixIT` (the table in section 6 over HTTP: every customer route against `ACTIVE`, scheduled, scheduled but overdue, `DELETING` and `DELETED`, each checked for the answer, the events written and the status the row ends in; plus the configured grace and schedule-cancel-schedule), the controller, handler, provisioning and admin tests, and the outbox and contract tests for the four deletion events.
 - **Provisioning and the email counter**: cases in `UserProvisioningServiceTest` (counted and nothing written, counted on every request, a scheduled account counted, six token shapes that must not count, a gone account never compared) and two in `SecurityFlowIT`.
 - **Promoter**: `DeletionPromotionServiceTest` (what a won claim writes and in which order, a lost claim writes nothing, the required set's copy), `DeletionPropertiesTest` (every deletion setting: legal and illegal values, the participant names and duplicates), `DeletionPromotionJobTest` (one batch per tick, a failing account does not stop the others, counters, no message in the log), the `UserRepositoryIT` cases for the work list and the claim, `UserDeletionParticipantRepositoryIT`, `DeletionPromotionIT`, `DeletionPromotionConcurrencyIT` (staged races: a cancel holding the lock beats a late promoter, a promoter holding it beats a cancel that began inside the grace period and gets 410, two promoters promote once, two whole jobs on 40 accounts, a failing event insert rolls everything back), `DeletionPromotionFlowIT` (HTTP with the real scheduler and a 2 s grace: a scheduled account becomes `DELETING`, scrubbed, with participants and events in order and 410 everywhere; a cancelled account is never promoted).
@@ -531,7 +530,7 @@ Each step lands with its tests and an update of this document.
 | Step | What | State |
 |---|---|---|
 | 5a | Keycloak realm and compose: profile lock, `verifyEmail`, `resetPasswordAllowed`, the `email` listener limited to password changes, admin events, SMTP and Mailpit, the `user-service-admin` client; `RealmFileTest`, `KeycloakRealmIT` | done |
-| 5b | Migrations V11–V14 (section 5) | done |
+| 5b | The saga schema (section 5) | done |
 | 5c | State machine and HTTP: `DELETION_SCHEDULED`, schedule and cancel, the four events with fixtures, participants in the admin view | done |
 | 5d | Provisioning: no email sync, the mismatch counter | done |
 | 5e | Promoter | done |

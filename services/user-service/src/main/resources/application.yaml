@@ -21,8 +21,7 @@ spring:
   # user-db (infra/docker-compose.yml) is now a dedicated Postgres instance for this service alone,
   # so there's no other service's tables to namespace away from inside it. Flyway and Hibernate both
   # fall back to Postgres' default search_path, which resolves to the "public" schema for a normal
-  # user - V1-V5 run against it exactly the same as they did against the old named schema, since none
-  # of them reference the schema name itself.
+  # user; no migration names a schema.
 
   jpa:
     # validate because we are using flyway

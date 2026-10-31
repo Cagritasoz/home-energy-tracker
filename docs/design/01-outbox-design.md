@@ -24,7 +24,7 @@ flowchart LR
 
 ## 2. The table
 
-`outbox_events` (migrations V7 and V8). One row is one complete event.
+`outbox_events` (migration V2). One row is one complete event.
 
 | Column | Purpose |
 |---|---|
@@ -33,20 +33,20 @@ flowchart LR
 | `aggregate_type`, `aggregate_id` | `User` and the user id as text. `aggregate_id` is the Kafka key: one aggregate's events share a partition. `text`, not `uuid`, so an aggregate with another id type still fits. |
 | `aggregate_version` | The entity's `version` after the change (nullable). Consumers use it to reject stale events. It has gaps: a version bump that emits nothing leaves one, so consumers compare with `>`, never `previous + 1`. Null for an event that is not "state of one aggregate" (a participant's confirmation about a user, for example). |
 | `event_type`, `schema_version` | Consumer dispatch; the payload shape's version (check `>= 1`). |
-| `topic` | Where to publish. Stored so the relay is generic and needs no mapping from type to topic; today it is always `user.events.v1`. |
+| `topic` | Where to publish. Stored so the relay is generic and needs no mapping from type to topic; today it is always `user.events.v1`. It must be a name Kafka accepts (`chk_outbox_events_topic_format`: 1 to 249 characters of `A-Za-z0-9._-`, not `.` or `..`), because a row Kafka refuses would stall the relay on it forever. |
 | `payload` | `jsonb`, must be a JSON object, under 256 KB (`chk_outbox_events_payload_is_object`, `chk_outbox_events_payload_size`). The **entire** event: envelope fields and `data`. See below. |
 | `correlation_id`, `causation_id` | The trace or request that started the chain, and the event that caused this one. Both nullable; `correlation_id` is always null until tracing is added (`docs/open/03-roadmap.md`), and the relay forwards it as a header when it is set. |
 | `occurred_at` | Domain time; also inside the payload. |
 | `created_at` | Row insert time (database default). `published_at - created_at` is the outbox latency, and the age of the oldest pending row's `created_at` is the stall alarm. |
 | `published_at` | Null means pending; anything else means done. |
 | `attempts`, `last_error` | Diagnostics for a send that failed (`attempts >= 0`). |
-| `parked` | Operator quarantine (V8): the relay skips parked rows, and a parked row is unpublished by definition (`chk_outbox_events_parked_unpublished`). Nothing parks a row automatically (section 9). |
+| `parked` | Operator quarantine: the relay skips parked rows, and a parked row is unpublished by definition (`chk_outbox_events_parked_unpublished`). Nothing parks a row automatically (section 9). |
 
 **The payload is the whole event** because the value on Kafka must not depend on how it got there. If the envelope lived in separate columns, switching to change-data-capture (section 14) would change the value's shape and every consumer with it. With the full body in `payload` the consumer sees byte-identical values from either publisher.
 
 **No `status` column.** `published_at IS NULL` is the state; there are exactly two, and a nullable timestamp also says when. An enum invites a `PROCESSING` state that needs lease-expiry logic, which the advisory lock (section 6) makes unnecessary. No `headers` column (the headers derive from the columns) and no `partition` column (the producer derives it from the key; storing it would pin the partition count into data).
 
-**Indexes**, both partial so they stay small however many published rows pile up: `idx_outbox_events_pending (seq) WHERE published_at IS NULL AND NOT parked` (the relay's hot query, which must repeat the same condition for Postgres to use it), `idx_outbox_events_published (published_at) WHERE published_at IS NOT NULL` (the purge job and replay by range), and `idx_outbox_events_parked (seq) WHERE parked` (the parked gauge and un-parking).
+**Indexes**, all partial so they stay small however many published rows pile up: `idx_outbox_events_pending (seq) WHERE published_at IS NULL AND NOT parked` (the relay's hot query, which must repeat the same condition for Postgres to use it), `idx_outbox_events_published (published_at) WHERE published_at IS NOT NULL` (the purge job and replay by range), and `idx_outbox_events_parked (seq) WHERE parked` (the parked gauge and un-parking).
 
 Rows are never updated by business code: the relay updates `published_at`, `attempts` and `last_error`, and the purge job deletes.
 
@@ -194,7 +194,7 @@ Alert rules to add when something scrapes them: oldest pending age above 60 s fo
 Deferred on purpose; pick them up with the step named, or when a load test or an incident asks for them.
 
 - **No database timeouts** (`statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, JDBC `socketTimeout`, `tcpKeepAlive`): a hung session can hold the advisory lock (every other instance then gets `IDLE` forever, silently) and a hung JDBC call blocks the scheduler thread. Part of the observability step.
-- **No topic validation.** `outbox_events.topic` has no format check, and a wrong or missing topic stalls the relay on that row forever (a missing topic shows up as metadata timeouts, which look transient). Fix: a check in a new migration (`^[A-Za-z0-9._-]{1,249}$`) and optionally a startup check that the topic exists.
+- **No check that the topic exists.** The format is checked by the table, but a well-formed topic that the broker does not have stalls the relay on that row (it shows up as metadata timeouts, which look transient). Optionally, a startup check that the topic exists.
 - **A few duplicates around an outage are still possible.** With `delivery.timeout.ms` equal to the relay's deadline, abandoned producer records die about when the tick does, but not exactly. `RelayIT` measured it: after a broker pause the relay's own deadline fires before the producer's expiry, and from the second failed tick the producer has lost its metadata, so `send` throws after one `max.block.ms` wait.
 - **A cold producer with Kafka down costs one `max.block.ms` wait per tick**, not one per row: a metadata timeout makes `send` throw and phase 1 stops at the first throw. A warm producer accepts the sends and the tick ends on its own 5 s deadline instead.
 - **Database failures are not counted as failed ticks** (above); they fail loudly through the scheduler's ERROR log. Optionally, catch `DataAccessException` and log one WARN without the stack trace.
@@ -219,7 +219,7 @@ Tests:
 ## 16. Roadmap
 
 - Replay: the `UserSnapshot` event with its fixture, `POST /api/v1/admin/users/replay-snapshots`, outbox replay by aggregate id or `seq` range, and the operator quarantine that uses `parked` (`docs/open/03-roadmap.md`, replay step).
-- Topic format check and database timeouts (section 13).
+- Database timeouts (section 13).
 - Prometheus endpoint, alert rules, trace id into `correlation_id` (observability step).
 - Relay tuning with load tests.
 - Outbox for the other services as they are rebuilt: the same table shape, writer rules and relay.

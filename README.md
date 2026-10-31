@@ -204,7 +204,7 @@ Unit tests are named `*Test` and run in Surefire. Integration tests are named `*
 
 user-service has more than 1,100 test cases. Highlights:
 
-- **Schema tests** that exercise every constraint, default and trigger directly against Postgres, plus a migration-upgrade test that upgrades a populated V7 database to the latest version.
+- **Schema tests** that exercise every constraint, default and trigger directly against Postgres.
 - **Native query tests** that check row counts, compare-and-set guards and optimistic-locking conflicts.
 - **Relay tests against real Postgres and Kafka**: a 120-row backlog drained in one tick, two instances competing for the advisory lock, the broker paused with `docker pause` (nothing marked as published, real cause stored, recovery in order, no payload in logs), and backoff timing checked with a fake clock.
 - **Keycloak admin client tests**: a WireMock server plays Keycloak (slow, down, connection reset, 5xx, rejected token, token expiry, circuit open and half-open), and the same client is checked against the real Keycloak image with the project's realm file. The deletion and orphan-address flows run end to end with the real scheduler.

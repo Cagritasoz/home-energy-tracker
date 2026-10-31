@@ -32,7 +32,7 @@ import static org.mockito.Mockito.when;
 // Layer 1: no Spring context, no database, no Kafka - just this
 // one class and a mocked UserRepository, so every test here runs in milliseconds. What this layer
 // deliberately does NOT prove: that markDeleting's SQL actually behaves the way its comment
-// describes, that uq_users_email really rejects a duplicate, that the V6 trigger really fires -
+// describes, that uq_users_email really rejects a duplicate, that the V1 trigger really fires -
 // those need a real Postgres (Layer 2, Testcontainers), which is the next thing to add.
 //
 // @ExtendWith(MockitoExtension.class) wires @Mock/@InjectMocks and, importantly, fails the test if

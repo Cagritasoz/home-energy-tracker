@@ -6,7 +6,7 @@ import jakarta.persistence.Embeddable;
 import java.io.Serializable;
 import java.util.UUID;
 
-// The primary key of user_deletion_participants (V13): one row per user and participating service.
+// The primary key of user_deletion_participants (V4): one row per user and participating service.
 @Embeddable
 public record UserDeletionParticipantId(
 

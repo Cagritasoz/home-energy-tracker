@@ -28,8 +28,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // Rollback: @DataJpaTest wraps every test in a transaction that is rolled back at the end, so the
 // rows inserted below vanish and the next test starts with an empty users table.
 //
-// The tests follow the order of the users table in V5 (columns, then CHECK constraints, then the
-// unique index) and end with V6's trigger. Inside each group the accepted case comes first, then
+// The tests follow the order of the users table in V1 (columns, then CHECK constraints, then the
+// unique index) and end with the trigger. Inside each group the accepted case comes first, then
 // the rejected one. Every rejected case is its own test (or its own parameterized invocation)
 // because in Postgres a failed statement aborts the whole transaction: nothing can run after it.
 @DataJpaTest
@@ -207,7 +207,7 @@ class UserSchemaIT {
 
     }
 
-    // V9: chk_users_deleting_consistency is: CHECK ((status = 'ACTIVE') = (deletion_requested_at IS NULL)).
+    // chk_users_deleting_consistency is: CHECK ((status = 'ACTIVE') = (deletion_requested_at IS NULL)).
     // Accepted side: chkUsersStatus_allFourLegalStatuses_areAccepted above inserts every status with its
     // matching timestamps. The rejected rows carry every other timestamp their status needs (columnsFor),
     // so each test can only fail on the constraint it names.
@@ -233,7 +233,7 @@ class UserSchemaIT {
 
     }
 
-    // V11: chk_users_deletion_scheduled_consistency is: CHECK ((status = 'ACTIVE') = (deletion_scheduled_for IS NULL)).
+    // chk_users_deletion_scheduled_consistency is: CHECK ((status = 'ACTIVE') = (deletion_scheduled_for IS NULL)).
     @Test
     void chkUsersDeletionScheduledConsistency_activeWithScheduledFor_isRejected() {
 
@@ -256,7 +256,7 @@ class UserSchemaIT {
 
     }
 
-    // V11: chk_users_deletion_started_consistency is:
+    // chk_users_deletion_started_consistency is:
     // CHECK ((status IN ('DELETING','DELETED')) = (deletion_started_at IS NOT NULL)).
     @ParameterizedTest
     @ValueSource(strings = {"ACTIVE", "DELETION_SCHEDULED"})
@@ -284,7 +284,7 @@ class UserSchemaIT {
 
     }
 
-    // V11: chk_users_deletion_scheduled_after_requested is: CHECK (deletion_scheduled_for >= deletion_requested_at).
+    // chk_users_deletion_scheduled_after_requested is: CHECK (deletion_scheduled_for >= deletion_requested_at).
     // The accepted cases: the same instant (an immediate deletion) and a grace period after the request.
     @Test
     void chkUsersDeletionScheduledAfterRequested_sameInstantAndLaterInstant_areAccepted() {
@@ -313,7 +313,7 @@ class UserSchemaIT {
 
     }
 
-    // V12: chk_users_keycloak_deleted_only_deleting_or_deleted is:
+    // chk_users_keycloak_deleted_only_deleting_or_deleted is:
     // CHECK (keycloak_deleted_at IS NULL OR status IN ('DELETING','DELETED')) - the Keycloak user is deleted
     // while the row is DELETING, so the timestamp is allowed from then on and never before.
     @ParameterizedTest
@@ -402,7 +402,7 @@ class UserSchemaIT {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // V11 and V14: the deletion columns and their indexes
+    // the deletion columns and their indexes
     // ---------------------------------------------------------------------------------------------
 
     // The two columns of the first saga design are gone and the three new ones exist.
@@ -434,7 +434,7 @@ class UserSchemaIT {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // V6: updated_at trigger
+    // updated_at trigger
     // ---------------------------------------------------------------------------------------------
 
     // These two tests insert with an explicit, old created_at/updated_at (year 2000) instead of

@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 
-// A service that must confirm it has removed the user's data before the deletion can finish (V13). The promoter
+// A service that must confirm it has removed the user's data before the deletion can finish (V4). The promoter
 // writes the rows when the deletion starts; the ack consumer sets acked_at; only a migration sets waived_at.
 // Read-only through this entity: the admin view shows who is still missing. The promoter inserts the rows with a
 // native query (UserDeletionParticipantRepository.insertRequired) and the ack consumer will update them the same way.

@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// V13: the services that must confirm a user's data is gone before the deletion can finish. Plain SQL, like
+// V4: the services that must confirm a user's data is gone before the deletion can finish. Plain SQL, like
 // UserSchemaIT; every rejected case is its own test because a failed statement aborts the transaction.
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)

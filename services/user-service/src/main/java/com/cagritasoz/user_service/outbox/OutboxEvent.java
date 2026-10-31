@@ -20,7 +20,7 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.util.UUID;
 
-// One row of the transactional outbox (V7): an event that was decided in the same transaction as the
+// One row of the transactional outbox (V2): an event that was decided in the same transaction as the
 // change it describes, and is published to Kafka later by the relay.
 //
 // Two kinds of column, and the mapping says which is which:
@@ -120,7 +120,7 @@ public class OutboxEvent {
     @Column(name = "last_error")
     private String lastError;
 
-    // True = set aside by the relay because it can never be published; skipped until un-parked (V8).
+    // True = set aside by the relay because it can never be published; skipped until un-parked (V2).
     @Builder.Default
     @Column(nullable = false)
     private boolean parked = false;
