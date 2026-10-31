@@ -38,7 +38,7 @@ public class User {
     @Column(nullable = false)
     private Long version;
 
-    // The deletion timestamps (V5, V9, V11): requested = the user asked, scheduled_for = when the grace period
+    // The deletion timestamps (V1): requested = the user asked, scheduled_for = when the grace period
     // ends, started_at = when the cleanup began, deleted_at = when it finished. The database ties each one to the
     // statuses that imply it.
     @Column(name = "deletion_requested_at")
@@ -53,7 +53,7 @@ public class User {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
-    // Set once the Keycloak user is hard-deleted, which happens while the row is DELETING (V9, V12).
+    // Set once the Keycloak user is hard-deleted, which happens while the row is DELETING (V1).
     @Column(name = "keycloak_deleted_at")
     private Instant keycloakDeletedAt;
 
@@ -66,7 +66,7 @@ public class User {
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 
-    // See migration V6 for trigger.
+    // The trigger is in V1.
     // Hibernate retrieves the database-generated value after insertion or update.
     @Generated(event = {EventType.INSERT, EventType.UPDATE})
     @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)

@@ -220,6 +220,43 @@ class OutboxEventSchemaIT {
 
     }
 
+    // A topic Kafka would refuse stalls the relay on its row forever, so the table refuses it first.
+    @ParameterizedTest
+    @ValueSource(strings = {"user.events.v1", "device.registry.v1", "a", "A-b_c.1", "..a", "a.."})
+    void chkOutboxEventsTopicFormat_legalName_isAccepted(String topic) {
+
+        assertThatCode(() -> insertEvent(Map.of("topic", topic)))
+                .doesNotThrowAnyException();
+
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", ".", "..", "user events", "user/events", "user.events!", "événements", "user.events\n"})
+    void chkOutboxEventsTopicFormat_illegalName_isRejected(String topic) {
+
+        assertThatThrownBy(() -> insertEvent(Map.of("topic", topic)))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_outbox_events_topic_format");
+
+    }
+
+    @Test
+    void chkOutboxEventsTopicFormat_longestLegalLength_isAccepted() {
+
+        assertThatCode(() -> insertEvent(Map.of("topic", "t".repeat(249))))
+                .doesNotThrowAnyException();
+
+    }
+
+    @Test
+    void chkOutboxEventsTopicFormat_oneCharacterTooLong_isRejected() {
+
+        assertThatThrownBy(() -> insertEvent(Map.of("topic", "t".repeat(250))))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("chk_outbox_events_topic_format");
+
+    }
+
     @Test
     void chkOutboxEventsParkedUnpublished_parkedAndPending_isAccepted() {
 

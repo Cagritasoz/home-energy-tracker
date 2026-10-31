@@ -23,17 +23,14 @@ Organised by feature, not by layer; main and test sources use the same package n
 
 ## Schema
 
-Flyway owns all DDL (`ddl-auto=validate`). Each column is explained in its migration's comments.
+Flyway owns all DDL (`ddl-auto=validate`). A table is created whole in one migration, with its constraints and indexes, and each column is explained in the migration's comments.
 
 | Migration | What it does |
 |---|---|
-| V1–V4 | history: the first users table, alerting fields (later dropped), `alert_rules`, an earlier outbox table |
-| V5 | reset around `users.id = sub` (UUID, never generated); `status` `ACTIVE`/`DELETING`/`DELETED`; `deletion_requested_at`, `deleted_at`, `version`; checks `chk_users_status`, `chk_users_email`, `chk_users_deleted_consistency`; partial unique `uq_users_email` (`lower(email)`, non-`DELETED`); `idx_users_deleting` |
-| V6 | `updated_at` trigger (the database stamps it) |
-| V7, V8 | `outbox_events` and its parking column and payload-size check (see the outbox design) |
-| V9 | `users.keycloak_deleted_at` and the saga consistency checks |
-| V10 | `processed_events` (see the processed-events design; used by the deletion saga's confirmation consumer) |
-| V11–V14 | saga schema, one concern per file: `deletion_scheduled_for`, `deletion_started_at`, the `DELETION_SCHEDULED` status and its checks and indexes (V11); `keycloak_deleted_at` allowed while `DELETING` (V12); `user_deletion_participants` (V13); the dropped `keycloak_disabled_at` and `devices_deleted` (V14). Described in the saga design, section 5 |
+| V1 | `users` and the trigger that stamps `updated_at`: `id` is the Keycloak `sub` (a UUID, never generated); `status` is `ACTIVE`, `DELETION_SCHEDULED`, `DELETING` or `DELETED`; the deletion timestamps with the checks that tie each to the statuses that imply it; the partial unique `uq_users_email` (`lower(email)`, non-`DELETED`); one partial index per deletion job scan. The saga's columns are described in its design, section 5 |
+| V2 | `outbox_events`: the row is the whole event, with the parking, payload-size and topic-format checks (see the outbox design) |
+| V3 | `processed_events` (see the processed-events design; the confirmation consumer of the deletion saga uses it) |
+| V4 | `user_deletion_participants` (saga design, sections 5 and 8) |
 
 The database owns time: `created_at` has a default and a `BEFORE UPDATE` trigger stamps `updated_at`; both are mapped `@Generated` (`insertable/updatable = false`). The trigger leaves `version` alone, so native `UPDATE`s bump `version = version + 1` themselves.
 

@@ -82,7 +82,7 @@ class OutboxPurgeJobIT {
 
     }
 
-    // created_at null = now; published_at null = pending. A parked row cannot be published (V8 CHECK).
+    // created_at null = now; published_at null = pending. A parked row cannot be published (V2 CHECK).
     private Long insertEvent(Instant createdAt, Instant publishedAt, boolean parked) {
 
         return jdbc.queryForObject("""

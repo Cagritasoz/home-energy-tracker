@@ -148,7 +148,7 @@ class UserRepositoryIT {
 
     }
 
-    // updated_at is stamped by V6's trigger, and Hibernate is told to expect that (@Generated on
+    // updated_at is stamped by V1's trigger, and Hibernate is told to expect that (@Generated on
     // INSERT and UPDATE). Two separate claims, both checked here:
     //  1. after the flush, the entity Hibernate is holding already carries the database's new
     //     updated_at - no reload needed. That refresh is the part that belongs to this layer;
@@ -807,7 +807,7 @@ class UserRepositoryIT {
         assertThat(user.getDisplayName()).isEqualTo("Deleted user");
         assertThat(user.getVersion()).isOne();
         assertThat(user.getDeletionStartedAt()).isAfter(Instant.parse(YEAR_2000)); // Stamped by the database.
-        assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000)); // The V6 trigger ran.
+        assertThat(user.getUpdatedAt()).isAfter(Instant.parse(YEAR_2000)); // The V1 trigger ran.
 
         // What the user asked for and when it was due stays on the row as history; nothing else is touched.
         assertThat(user.getDeletionRequestedAt()).isEqualTo(Instant.parse(YEAR_2000));

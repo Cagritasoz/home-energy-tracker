@@ -6,7 +6,7 @@ How a service that consumes Kafka events applies each event exactly once in effe
 
 | Part | State |
 |---|---|
-| The table `processed_events` in user-service (migration V10) and its schema test | built |
+| The table `processed_events` in user-service (migration V3) and its schema test | built |
 | The shared consumer pieces in user-service's `consumer` package: `ProcessedEvents` (the claim and the purge), `ProcessedEventsPurgeJob`, `EventEnvelopeReader`, `PoisonEventException`, `KafkaConsumerConfig` (the error handler) | built |
 | The first consumer: `ParticipantAckListener` and `ParticipantAckService` (package `deletion.ack`), which apply the deletion saga's participant confirmations (`03-account-deletion-saga.md`, section 8.5) | built |
 | Consumers in other services, the dead-letter topic of `user.events.v1` (created with its first consumer), alerts on dead-letter topics | not built |

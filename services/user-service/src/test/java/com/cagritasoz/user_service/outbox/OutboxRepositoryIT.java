@@ -315,7 +315,7 @@ class OutboxRepositoryIT {
     }
 
     // Inserts a row with explicit created_at / published_at (null = created now / not published) and returns its
-    // seq. A parked row cannot be published (V8 CHECK), so never pass both.
+    // seq. A parked row cannot be published (V2 CHECK), so never pass both.
     private Seeded seed(Instant createdAt, Instant publishedAt, boolean parked, int attempts) {
 
         UUID id = UUID.randomUUID();
