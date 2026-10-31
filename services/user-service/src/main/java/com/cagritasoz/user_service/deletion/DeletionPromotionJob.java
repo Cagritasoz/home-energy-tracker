@@ -3,7 +3,7 @@ package com.cagritasoz.user_service.deletion;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -24,6 +24,7 @@ import java.util.UUID;
 // the compare-and-set inside promote() makes harmless.
 @Slf4j
 @Component
+@EnableConfigurationProperties(DeletionProperties.class)
 public class DeletionPromotionJob {
 
     private final DeletionPromotionService promotionService;
@@ -36,16 +37,10 @@ public class DeletionPromotionJob {
 
     public DeletionPromotionJob(DeletionPromotionService promotionService,
                                MeterRegistry meterRegistry,
-                               @Value("${app.user.deletion.promoter.batch-size}") int batchSize) {
-
-        if (batchSize < 1) {
-
-            throw new IllegalArgumentException("app.user.deletion.promoter.batch-size must be at least 1 but was " + batchSize);
-
-        }
+                               DeletionProperties properties) {
 
         this.promotionService = promotionService;
-        this.batchSize = batchSize;
+        this.batchSize = properties.promoter().batchSize();
         this.promotedCounter = Counter.builder("user.deletion.promoted")
                 .description("Accounts moved from DELETION_SCHEDULED to DELETING by this instance")
                 .register(meterRegistry);

@@ -1,11 +1,10 @@
 package com.cagritasoz.user_service.deletion;
 
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -48,7 +47,7 @@ class DeletionPromotionJobTest {
     void createJob() {
 
         meters = new SimpleMeterRegistry();
-        job = new DeletionPromotionJob(promotionService, meters, BATCH_SIZE);
+        job = new DeletionPromotionJob(promotionService, meters, ConfigFixtures.deletion("promoter.batch-size=" + BATCH_SIZE));
 
     }
 
@@ -58,16 +57,6 @@ class DeletionPromotionJobTest {
 
     private double failures() {
         return meters.get("user.deletion.promotion.failures").counter().count();
-    }
-
-    @ParameterizedTest
-    @ValueSource(ints = {0, -1})
-    void constructor_batchSizeBelowOne_refusesToStart(int batchSize) {
-
-        assertThatThrownBy(() -> new DeletionPromotionJob(promotionService, meters, batchSize))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("app.user.deletion.promoter.batch-size");
-
     }
 
     @Test

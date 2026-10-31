@@ -5,6 +5,7 @@ import com.cagritasoz.user_service.consumer.ReceivedEvent;
 import com.cagritasoz.user_service.deletion.ack.ParticipantAck;
 import com.cagritasoz.user_service.deletion.ack.ParticipantAckService;
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -144,8 +145,8 @@ class DeletionFinalizationConcurrencyIT {
 
         SimpleMeterRegistry metersA = new SimpleMeterRegistry();
         SimpleMeterRegistry metersB = new SimpleMeterRegistry();
-        DeletionFinalizationJob jobA = new DeletionFinalizationJob(finalizationService, metersA, 7);
-        DeletionFinalizationJob jobB = new DeletionFinalizationJob(finalizationService, metersB, 7);
+        DeletionFinalizationJob jobA = new DeletionFinalizationJob(finalizationService, metersA, ConfigFixtures.deletion("finalizer.batch-size=7"));
+        DeletionFinalizationJob jobB = new DeletionFinalizationJob(finalizationService, metersB, ConfigFixtures.deletion("finalizer.batch-size=7"));
         CountDownLatch gate = new CountDownLatch(1);
 
         Future<?> a = threads.submit(() -> drain(jobA, gate));

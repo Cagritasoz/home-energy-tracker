@@ -273,7 +273,7 @@ app:
       # 5xx, a rejected token). Both calls are idempotent, which is what makes this safe.
       retry:
         max-attempts: 2
-        wait: 200ms
+        wait-duration: 200ms
       # Stops asking a Keycloak that keeps failing: with at least minimum-calls attempts in the last sliding-window-size,
       # and failure-rate-threshold percent of them failed, calls are refused for wait-in-open-state, then half-open-calls
       # probes decide whether to close again. Every attempt counts, retries included. The state is the gauge
@@ -288,3 +288,9 @@ app:
   security:
     # Required for audience mapper
     required-audience: user-service
+
+    cors:
+      # The origins a browser may call the API from, as a comma-separated list (no wildcard: the API takes bearer tokens,
+      # and an origin that is not listed gets a 403 on its preflight and on its request). The React frontend, which does
+      # not exist yet, runs on port 3000 in development.
+      allowed-origins: http://localhost:3000

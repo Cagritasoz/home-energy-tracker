@@ -1,5 +1,6 @@
 package com.cagritasoz.user_service.keycloak;
 
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.MeterBinder;
@@ -51,6 +52,25 @@ class KeycloakAdminConfigTest {
         assertThat(breaker.getCircuitBreakerConfig().getWaitIntervalFunctionInOpenState().apply(1)).isEqualTo(45_000L);
         assertThat(breaker.getCircuitBreakerConfig().getPermittedNumberOfCallsInHalfOpenState()).isEqualTo(4);
         assertThat(breaker.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
+
+    }
+
+    // Five numbers of one type, so a swapped pair compiles: every value is different, and each must land in its place.
+    @Test
+    void keycloakAdminCircuitBreaker_takesEverySettingFromTheProperties() {
+
+        KeycloakAdminProperties properties = ConfigFixtures.keycloakAdmin("client-secret=test-secret",
+                "circuit-breaker.sliding-window-size=8", "circuit-breaker.minimum-calls=3",
+                "circuit-breaker.failure-rate-threshold=60", "circuit-breaker.wait-in-open-state=45s",
+                "circuit-breaker.half-open-calls=4");
+
+        CircuitBreaker breaker = config.keycloakAdminCircuitBreaker(properties);
+
+        assertThat(breaker.getCircuitBreakerConfig().getSlidingWindowSize()).isEqualTo(8);
+        assertThat(breaker.getCircuitBreakerConfig().getMinimumNumberOfCalls()).isEqualTo(3);
+        assertThat(breaker.getCircuitBreakerConfig().getFailureRateThreshold()).isEqualTo(60f);
+        assertThat(breaker.getCircuitBreakerConfig().getWaitIntervalFunctionInOpenState().apply(1)).isEqualTo(45_000L);
+        assertThat(breaker.getCircuitBreakerConfig().getPermittedNumberOfCallsInHalfOpenState()).isEqualTo(4);
 
     }
 

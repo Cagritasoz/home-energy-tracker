@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import com.cagritasoz.user_service.user.AccountDeletedException;
 import com.cagritasoz.user_service.user.User;
@@ -12,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -49,7 +49,7 @@ class DeletionSchedulingServiceTest {
     private OutboxService outboxService;
 
     private DeletionSchedulingService service() {
-        return new DeletionSchedulingService(userRepository, outboxService, GRACE);
+        return new DeletionSchedulingService(userRepository, outboxService, ConfigFixtures.deletion("grace=" + GRACE));
     }
 
     private User userWithStatus(UserStatus status) {
@@ -63,26 +63,6 @@ class DeletionSchedulingServiceTest {
                 .deletionRequestedAt(Instant.parse("2026-01-31T23:50:00Z"))
                 .deletionScheduledFor(DEADLINE)
                 .build();
-    }
-
-    // --- the grace period setting
-
-    @ParameterizedTest
-    @ValueSource(strings = {"PT0S", "-PT1S", "-PT5M"})
-    void constructor_zeroOrNegativeGrace_refusesToStart(String grace) {
-
-        assertThatThrownBy(() -> new DeletionSchedulingService(userRepository, outboxService, Duration.parse(grace)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("app.user.deletion.grace");
-
-    }
-
-    @Test
-    void constructor_positiveGrace_isAccepted() {
-
-        assertThatCode(() -> new DeletionSchedulingService(userRepository, outboxService, Duration.ofNanos(1)))
-                .doesNotThrowAnyException();
-
     }
 
     // --- scheduleForImmediateDeletion (an orphaned account that has to go now)
@@ -152,7 +132,7 @@ class DeletionSchedulingServiceTest {
     @Test
     void scheduleDeletion_passesTheGraceAsAnIsoDuration() {
 
-        DeletionSchedulingService thirtyDays = new DeletionSchedulingService(userRepository, outboxService, Duration.ofDays(30));
+        DeletionSchedulingService thirtyDays = new DeletionSchedulingService(userRepository, outboxService, ConfigFixtures.deletion("grace=30d"));
         when(userRepository.scheduleDeletion(USER_ID, "PT720H")).thenReturn(1);
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(scheduledUser()));
 

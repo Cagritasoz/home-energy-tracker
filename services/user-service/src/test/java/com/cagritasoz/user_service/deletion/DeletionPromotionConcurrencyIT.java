@@ -1,6 +1,7 @@
 package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.user.AccountDeletedException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -232,8 +233,8 @@ class DeletionPromotionConcurrencyIT {
 
         SimpleMeterRegistry metersA = new SimpleMeterRegistry();
         SimpleMeterRegistry metersB = new SimpleMeterRegistry();
-        DeletionPromotionJob jobA = new DeletionPromotionJob(promotionService, metersA, 7);
-        DeletionPromotionJob jobB = new DeletionPromotionJob(promotionService, metersB, 7);
+        DeletionPromotionJob jobA = new DeletionPromotionJob(promotionService, metersA, ConfigFixtures.deletion("promoter.batch-size=7"));
+        DeletionPromotionJob jobB = new DeletionPromotionJob(promotionService, metersB, ConfigFixtures.deletion("promoter.batch-size=7"));
         CountDownLatch gate = new CountDownLatch(1);
 
         Future<?> a = threads.submit(() -> drain(jobA, gate));

@@ -1,13 +1,12 @@
 package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.data.UserFixtures;
 import com.cagritasoz.user_service.user.User;
 import com.cagritasoz.user_service.user.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -18,7 +17,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
@@ -41,25 +39,7 @@ class DeletionFinalizationServiceTest {
     private OutboxService outboxService;
 
     private DeletionFinalizationService service(Duration quietPeriod) {
-        return new DeletionFinalizationService(userRepository, outboxService, quietPeriod);
-    }
-
-    // A negative period would finalize an account before its Keycloak user is deleted.
-    @ParameterizedTest
-    @ValueSource(longs = {-1, -600})
-    void constructor_negativeQuietPeriod_refusesToStart(long seconds) {
-
-        assertThatThrownBy(() -> service(Duration.ofSeconds(seconds)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("app.user.deletion.quiet-period");
-
-    }
-
-    @Test
-    void constructor_zeroQuietPeriod_isAllowed() {
-
-        assertThatCode(() -> service(Duration.ZERO)).doesNotThrowAnyException();
-
+        return new DeletionFinalizationService(userRepository, outboxService, ConfigFixtures.deletion("quiet-period=" + quietPeriod));
     }
 
     // The queries read the period as a Postgres interval, which accepts the ISO-8601 form Duration prints.

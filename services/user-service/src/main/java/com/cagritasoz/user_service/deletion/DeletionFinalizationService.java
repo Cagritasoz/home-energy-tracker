@@ -3,11 +3,10 @@ package com.cagritasoz.user_service.deletion;
 import com.cagritasoz.user_service.outbox.OutboxService;
 import com.cagritasoz.user_service.user.User;
 import com.cagritasoz.user_service.user.UserRepository;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -27,6 +26,7 @@ import java.util.UUID;
 // Nothing is ever forced through: a stuck DELETING row harms nobody (the user is already gone from Keycloak and scrubbed),
 // whereas finalizing early would hide an incomplete deletion.
 @Service
+@EnableConfigurationProperties(DeletionProperties.class)
 public class DeletionFinalizationService {
 
     private final UserRepository userRepository;
@@ -38,19 +38,11 @@ public class DeletionFinalizationService {
 
     public DeletionFinalizationService(UserRepository userRepository,
                                        OutboxService outboxService,
-                                       @Value("${app.user.deletion.quiet-period}") Duration quietPeriod) {
-
-        // Zero is allowed (a test, or a deployment that does not care); a negative period would finalize an account
-        // before its Keycloak user is deleted.
-        if (quietPeriod.isNegative()) {
-
-            throw new IllegalArgumentException("app.user.deletion.quiet-period must not be negative but was " + quietPeriod);
-
-        }
+                                       DeletionProperties properties) {
 
         this.userRepository = userRepository;
         this.outboxService = outboxService;
-        this.quietPeriod = quietPeriod.toString();
+        this.quietPeriod = properties.quietPeriod().toString();
 
     }
 

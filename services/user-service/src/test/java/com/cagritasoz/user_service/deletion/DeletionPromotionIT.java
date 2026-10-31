@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.user.UserRepository;
 import com.cagritasoz.user_service.user.UserStatus;
@@ -165,7 +166,8 @@ class DeletionPromotionIT {
         promotionService.promote(early);
 
         DeletionPromotionService afterTheChange =
-                new DeletionPromotionService(userRepository, participantRepository, outboxService, List.of("alerts"));
+                new DeletionPromotionService(userRepository, participantRepository, outboxService,
+                        ConfigFixtures.deletion("required-participants=alerts"));
         afterTheChange.promote(late);
 
         assertThat(participantsOf(early)).containsExactly("devices", "usage");
@@ -180,7 +182,8 @@ class DeletionPromotionIT {
         UUID id = UUID.randomUUID();
         insertScheduledUser(id, YEAR_2000);
         DeletionPromotionService noParticipants =
-                new DeletionPromotionService(userRepository, participantRepository, outboxService, List.of());
+                new DeletionPromotionService(userRepository, participantRepository, outboxService,
+                        ConfigFixtures.deletion("required-participants="));
 
         assertThat(noParticipants.promote(id)).isTrue();
 

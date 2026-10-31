@@ -5,6 +5,7 @@ import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.kafka.KafkaProducerConfig;
 import com.cagritasoz.user_service.outbox.OutboxEvent;
 import com.cagritasoz.user_service.outbox.OutboxRepository;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.containers.KafkaOutage;
 import com.cagritasoz.user_service.testsupport.containers.KafkaTestContainerConfig;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
@@ -167,7 +168,7 @@ class RelayIT {
             insertEvent(topic, uuid(), null);
         }
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        OutboxRelay relay = new OutboxRelay(publisher, meters, 10, 4_000, 30_000, System::nanoTime);
+        OutboxRelay relay = new OutboxRelay(publisher, meters, relaySettings(), System::nanoTime);
 
         relay.relay(); // 120 rows, batch size 50: three batches, one tick
 
@@ -365,7 +366,7 @@ class RelayIT {
         props.put("max.block.ms", "1000");
         DefaultKafkaProducerFactory<String, String> coldFactory = new DefaultKafkaProducerFactory<>(props);
         try {
-            OutboxBatchPublisher coldPublisher = new OutboxBatchPublisher(outboxRepository, new KafkaTemplate<>(coldFactory), 50, 5_000);
+            OutboxBatchPublisher coldPublisher = new OutboxBatchPublisher(outboxRepository, new KafkaTemplate<>(coldFactory), relaySettings());
             List<Seeded> rows = new ArrayList<>();
             for (int i = 0; i < 20; i++) {
                 rows.add(insertEvent("any.topic", uuid(), null));
@@ -400,7 +401,7 @@ class RelayIT {
         // timeouts (the failed ticks themselves) take wall-clock time.
         // Initial value is 0 for clock.
         AtomicLong nowNanos = new AtomicLong();
-        OutboxRelay relay = new OutboxRelay(publisher, new SimpleMeterRegistry(), 10, 4_000, 30_000, nowNanos::get);
+        OutboxRelay relay = new OutboxRelay(publisher, new SimpleMeterRegistry(), relaySettings(), nowNanos::get);
 
         pauseBroker();
         try {
@@ -453,6 +454,15 @@ class RelayIT {
     }
 
     // ---- test helpers ------------------------------------------------------------------------------
+
+    // The relay's settings as the application ships them (a batch of 50, a 5 s deadline, ten batches a tick, a backoff
+    // from 4 s up to 30 s), spelled out so that the tests below do not change with application.yaml.
+    private static OutboxProperties relaySettings() {
+
+        return ConfigFixtures.outbox("relay.batch-size=50", "relay.send-timeout-ms=5000", "relay.max-batches-per-tick=10",
+                "relay.backoff.initial-ms=4000", "relay.backoff.max-ms=30000");
+
+    }
 
     private record Seeded(long seq, UUID eventId, String aggregateId) {
     }

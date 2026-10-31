@@ -5,7 +5,7 @@ import com.cagritasoz.user_service.keycloak.KeycloakUnavailableException;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -26,6 +26,7 @@ import java.util.UUID;
 // fixedDelay, not fixedRate, so a tick never overlaps the previous one in this instance.
 @Slf4j
 @Component
+@EnableConfigurationProperties(DeletionProperties.class)
 public class KeycloakDeletionJob {
 
     private final KeycloakDeletionService deletionService;
@@ -38,16 +39,10 @@ public class KeycloakDeletionJob {
 
     public KeycloakDeletionJob(KeycloakDeletionService deletionService,
                                MeterRegistry meterRegistry,
-                               @Value("${app.user.deletion.keycloak.batch-size}") int batchSize) {
-
-        if (batchSize < 1) {
-
-            throw new IllegalArgumentException("app.user.deletion.keycloak.batch-size must be at least 1 but was " + batchSize);
-
-        }
+                               DeletionProperties properties) {
 
         this.deletionService = deletionService;
-        this.batchSize = batchSize;
+        this.batchSize = properties.keycloak().batchSize();
         this.deletedCounter = Counter.builder("user.deletion.keycloak.deleted")
                 .description("Accounts whose Keycloak user this instance deleted and recorded")
                 .register(meterRegistry);

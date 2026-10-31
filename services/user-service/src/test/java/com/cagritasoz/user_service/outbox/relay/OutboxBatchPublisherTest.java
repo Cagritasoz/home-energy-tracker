@@ -5,6 +5,7 @@ import com.cagritasoz.contracts.user.UserEventType;
 import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.outbox.OutboxEvent;
 import com.cagritasoz.user_service.outbox.OutboxRepository;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.apache.kafka.common.errors.TimeoutException;
@@ -67,7 +68,7 @@ class OutboxBatchPublisherTest {
     @BeforeEach
     void setUp() {
 
-        outboxBatchPublisher = new OutboxBatchPublisher(outboxRepository, kafkaTemplate, 50, 5_000);
+        outboxBatchPublisher = publisherWith(50, 5_000);
 
     }
 
@@ -120,10 +121,24 @@ class OutboxBatchPublisherTest {
 
     }
 
+    // Built by hand, not bound: a send timeout of zero is how the test below makes the deadline pass before the first
+    // wait, and the application refuses to start with one.
+    private OutboxBatchPublisher publisherWith(int batchSize, long sendTimeoutMs) {
+
+        OutboxProperties yaml = ConfigFixtures.outbox();
+        OutboxProperties.Relay relay = yaml.relay();
+        OutboxProperties settings = new OutboxProperties(
+                new OutboxProperties.Relay(relay.intervalMs(), batchSize, sendTimeoutMs, relay.maxBatchesPerTick(), relay.backoff()),
+                yaml.purge());
+
+        return new OutboxBatchPublisher(outboxRepository, kafkaTemplate, settings);
+
+    }
+
     @Test
     void publishBatch_batchFilledToItsSize_reportsFullSoTheRelayKeepsDraining() {
 
-        OutboxBatchPublisher smallBatches = new OutboxBatchPublisher(outboxRepository, kafkaTemplate, 3, 5_000);
+        OutboxBatchPublisher smallBatches = publisherWith(3, 5_000);
         lockAcquiredAndPending(event(1L), event(2L), event(3L));
         when(kafkaTemplate.send(anyRecord())).thenReturn(acked(), acked(), acked());
 
@@ -139,7 +154,7 @@ class OutboxBatchPublisherTest {
 
         // A zero timeout means the deadline has passed before the first get(). A future that is already
         // complete must still be accepted: the deadline limits waiting, not reading a finished result.
-        OutboxBatchPublisher noWaiting = new OutboxBatchPublisher(outboxRepository, kafkaTemplate, 50, 0);
+        OutboxBatchPublisher noWaiting = publisherWith(50, 0);
         lockAcquiredAndPending(event(1L), event(2L));
         when(kafkaTemplate.send(anyRecord())).thenReturn(acked(), acked());
 
@@ -285,7 +300,7 @@ class OutboxBatchPublisherTest {
     @Test
     void publishBatch_ackNeverArrives_batchDeadlinePassesAndRowIsRecordedAsTimedOut() {
 
-        OutboxBatchPublisher impatient = new OutboxBatchPublisher(outboxRepository, kafkaTemplate, 50, 50);
+        OutboxBatchPublisher impatient = publisherWith(50, 50);
         lockAcquiredAndPending(event(1L), event(2L), event(3L));
         // Row 2's ack never comes (a future nobody completes); row 3 is acked but sits behind it.
         when(kafkaTemplate.send(anyRecord())).thenReturn(acked(), new CompletableFuture<>(), acked());

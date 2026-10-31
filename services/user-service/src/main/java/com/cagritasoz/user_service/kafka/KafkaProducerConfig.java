@@ -5,7 +5,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.config.SslConfigs;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.kafka.autoconfigure.DefaultKafkaProducerFactoryCustomizer;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
@@ -33,7 +33,7 @@ import java.util.Map;
 //
 // Both factories are built the way Boot builds its own: spring.kafka.producer.* (application.yaml, what every producer of
 // the service shares), then the client id of the producer (app.kafka.relay-producer.client-id and
-// app.kafka.dead-letter-producer.client-id, each read with @Value), then what the connection details say about the
+// app.kafka.dead-letter-producer.client-id, bound by KafkaClientIdProperties), then what the connection details say about the
 // connection (the bootstrap servers, security protocol and SSL bundle: this is how a Testcontainers @ServiceConnection or
 // a platform points the producer at its broker, and spring.kafka.producer.* alone would miss it), then Boot's
 // DefaultKafkaProducerFactoryCustomizer beans (the Micrometer client metrics).
@@ -47,25 +47,26 @@ import java.util.Map;
 //
 // The factories are beans, so Spring closes them (and their producers) with the application context.
 @Configuration
+@EnableConfigurationProperties(KafkaClientIdProperties.class)
 public class KafkaProducerConfig {
 
     @Bean
-    ProducerFactory<String, String> relayProducerFactory(@Value("${app.kafka.relay-producer.client-id}") String clientId,
+    ProducerFactory<String, String> relayProducerFactory(KafkaClientIdProperties clientIds,
                                                          KafkaProperties properties,
                                                          KafkaConnectionDetails connectionDetails,
                                                          ObjectProvider<DefaultKafkaProducerFactoryCustomizer> customizers) {
 
-        return producerFactory(clientId, properties, connectionDetails, customizers);
+        return producerFactory(clientIds.relayProducer().clientId(), properties, connectionDetails, customizers);
 
     }
 
     @Bean
-    ProducerFactory<String, String> deadLetterProducerFactory(@Value("${app.kafka.dead-letter-producer.client-id}") String clientId,
+    ProducerFactory<String, String> deadLetterProducerFactory(KafkaClientIdProperties clientIds,
                                                               KafkaProperties properties,
                                                               KafkaConnectionDetails connectionDetails,
                                                               ObjectProvider<DefaultKafkaProducerFactoryCustomizer> customizers) {
 
-        return producerFactory(clientId, properties, connectionDetails, customizers);
+        return producerFactory(clientIds.deadLetterProducer().clientId(), properties, connectionDetails, customizers);
 
     }
 

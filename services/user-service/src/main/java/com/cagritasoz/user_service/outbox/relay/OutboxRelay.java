@@ -4,7 +4,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -24,6 +24,7 @@ import java.util.function.LongSupplier;
 // to normal as soon as a tick makes progress. No half-open probes, no failure-rate window.
 @Slf4j
 @Component
+@EnableConfigurationProperties(OutboxProperties.class)
 public class OutboxRelay {
 
     private final OutboxBatchPublisher batchPublisher;
@@ -62,22 +63,18 @@ public class OutboxRelay {
     @Autowired
     public OutboxRelay(OutboxBatchPublisher batchPublisher,
                        MeterRegistry meterRegistry,
-                       @Value("${app.outbox.relay.max-batches-per-tick}") int maxBatchesPerTick,
-                       @Value("${app.outbox.relay.backoff.initial-ms}") long initialBackoffMs,
-                       @Value("${app.outbox.relay.backoff.max-ms}") long maxBackoffMs) {
-        this(batchPublisher, meterRegistry, maxBatchesPerTick, initialBackoffMs, maxBackoffMs, System::nanoTime);
+                       OutboxProperties properties) {
+        this(batchPublisher, meterRegistry, properties, System::nanoTime);
     }
 
     OutboxRelay(OutboxBatchPublisher batchPublisher,
                 MeterRegistry meterRegistry,
-                int maxBatchesPerTick,
-                long initialBackoffMs,
-                long maxBackoffMs,
+                OutboxProperties properties,
                 LongSupplier nanoClock) {
         this.batchPublisher = batchPublisher;
-        this.maxBatchesPerTick = maxBatchesPerTick;
-        this.initialBackoffNanos = TimeUnit.MILLISECONDS.toNanos(initialBackoffMs);
-        this.maxBackoffNanos = TimeUnit.MILLISECONDS.toNanos(maxBackoffMs);
+        this.maxBatchesPerTick = properties.relay().maxBatchesPerTick();
+        this.initialBackoffNanos = TimeUnit.MILLISECONDS.toNanos(properties.relay().backoff().initialMs());
+        this.maxBackoffNanos = TimeUnit.MILLISECONDS.toNanos(properties.relay().backoff().maxMs());
         this.nanoClock = nanoClock;
         this.backoffUntilNanos = nanoClock.getAsLong();
         this.rowsPublishedCounter = meterRegistry.counter("outbox.rows.published");

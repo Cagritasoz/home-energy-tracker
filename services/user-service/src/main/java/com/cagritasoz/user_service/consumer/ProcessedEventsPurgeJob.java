@@ -1,7 +1,7 @@
 package com.cagritasoz.user_service.consumer;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 // longest a redelivery can still arrive (the topics' retention), so a row this old can never be needed again.
 @Slf4j
 @Component
+@EnableConfigurationProperties(ProcessedEventsProperties.class)
 public class ProcessedEventsPurgeJob {
 
     private final ProcessedEvents processedEvents;
@@ -17,19 +18,11 @@ public class ProcessedEventsPurgeJob {
 
     private final int batchSize;
 
-    public ProcessedEventsPurgeJob(ProcessedEvents processedEvents,
-                                   @Value("${app.processed-events.purge.retention-days}") int retentionDays,
-                                   @Value("${app.processed-events.purge.batch-size}") int batchSize) {
-
-        if (retentionDays < 1 || batchSize < 1) {
-
-            throw new IllegalArgumentException("app.processed-events.purge.retention-days and .batch-size must be at least 1");
-
-        }
+    public ProcessedEventsPurgeJob(ProcessedEvents processedEvents, ProcessedEventsProperties properties) {
 
         this.processedEvents = processedEvents;
-        this.retentionDays = retentionDays;
-        this.batchSize = batchSize;
+        this.retentionDays = properties.purge().retentionDays();
+        this.batchSize = properties.purge().batchSize();
 
     }
 

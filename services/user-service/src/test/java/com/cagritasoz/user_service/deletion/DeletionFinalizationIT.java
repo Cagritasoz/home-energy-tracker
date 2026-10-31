@@ -2,6 +2,7 @@ package com.cagritasoz.user_service.deletion;
 
 import com.cagritasoz.contracts.user.UserEvents;
 import com.cagritasoz.user_service.outbox.OutboxService;
+import com.cagritasoz.user_service.testsupport.config.ConfigFixtures;
 import com.cagritasoz.user_service.testsupport.containers.PostgresTestContainerConfig;
 import com.cagritasoz.user_service.user.UserRepository;
 import com.cagritasoz.user_service.user.UserStatus;
@@ -17,7 +18,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -236,7 +236,7 @@ class DeletionFinalizationIT {
 
         UUID id = UUID.randomUUID();
         insertDeletingUser(id, "0 seconds");
-        DeletionFinalizationService noWaiting = new DeletionFinalizationService(userRepository, outboxService, Duration.ZERO);
+        DeletionFinalizationService noWaiting = new DeletionFinalizationService(userRepository, outboxService, ConfigFixtures.deletion("quiet-period=PT0S"));
 
         assertThat(noWaiting.findReady(10)).containsExactly(id);
         assertThat(noWaiting.finalizeDeletion(id)).isTrue();
@@ -249,7 +249,7 @@ class DeletionFinalizationIT {
 
         UUID id = UUID.randomUUID();
         insertDeletingUser(id, "30 minutes");
-        DeletionFinalizationService oneHour = new DeletionFinalizationService(userRepository, outboxService, Duration.ofHours(1));
+        DeletionFinalizationService oneHour = new DeletionFinalizationService(userRepository, outboxService, ConfigFixtures.deletion("quiet-period=PT1H"));
 
         assertThat(finalizationService.findReady(10)).containsExactly(id);
         assertThat(oneHour.findReady(10)).isEmpty();
