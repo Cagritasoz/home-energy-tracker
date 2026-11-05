@@ -110,8 +110,7 @@ public class SecurityConfig {
 
         OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
 
-        // Clock skew of 50 seconds instead of the default 60 seconds.
-        // OAuth2TokenValidator<Jwt> timestampValidator = new JwtTimestampValidator(Duration.ofSeconds(50));
+        // The default validators include the timestamp check with its default clock skew of 60 seconds.
 
         OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(securityProperties.requiredAudience());
 

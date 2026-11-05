@@ -70,4 +70,5 @@ Modules are `testcontainers-postgresql`, `testcontainers-junit-jupiter`, …; `o
 - The Maven wrapper is `./mvnw` in a POSIX shell and `.\mvnw.cmd` in PowerShell.
 - After moving or renaming classes, run `clean` before `verify`: stale classes in `target/` break Surefire.
 - Working-tree files are a mix of CRLF and LF; keep a file's existing line endings when editing it.
+- The IDE resolves a `${...}` placeholder against the test classpath, so the hint beside a `@Scheduled` or `autoStartup` placeholder shows the value from `src/test/resources/application.properties` (a day for the finalizer interval, `false` for the ack consumer), not the one in `application.yaml`.
 - The console code page is cp1254; set `PYTHONIOENCODING=utf-8` when a script prints non-ASCII text.
