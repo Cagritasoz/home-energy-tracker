@@ -215,6 +215,32 @@ class SecurityAuthenticationTest extends SecuritySliceTest {
         call(Route.ME_GET, user().claim("aud", "user-service").bearer()).andExpect(status().isOk());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"not-a-uuid", "f:3f2504e0-4f89-11d3-9a0c-0305e82c3301:alice", "1-1-1-1-1", ""})
+    void tokenWithSubjectThatIsNotAUuid_isRejected(String subject) throws Exception {
+        assertInvalidToken(user().claim("sub", subject).signed());
+    }
+
+    @Test
+    void tokenWithoutSubject_isRejected() throws Exception {
+        assertInvalidToken(user().without("sub").signed());
+    }
+
+    @Test
+    void tokenWithUpperCaseUuidSubject_isAccepted() throws Exception {
+        // USER_ID is all digits and would be unchanged by upper-casing.
+        String subject = "ABCDEFAB-ABCD-4BCD-8BCD-ABCDEFABCDEF";
+
+        call(Route.ME_GET, user().claim("sub", subject).bearer()).andExpect(status().isOk());
+    }
+
+    @Test
+    void rejectedSubject_isNeverEchoedInTheResponse() throws Exception {
+        String body = call(Route.ME_GET, user().claim("sub", "not-a-uuid").bearer()).andReturn().getResponse().getContentAsString();
+
+        assertThat(body).doesNotContain("not-a-uuid");
+    }
+
     @Test
     void rejectedToken_isNeverEchoedInTheResponse() throws Exception {
         String token = user().expiresAt(Instant.now().minusSeconds(300)).signed();
