@@ -8,7 +8,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
@@ -35,14 +36,16 @@ import java.util.UUID;
 // (that is what the advisory lock is for), so there is no lost-update race to guard against.
 @Entity
 @Table(name = "outbox_events")
-@Data
+@Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-// @Data would build equals/hashCode from every field, including the big payload, and from a seq that
-// is null until the first flush. The event's own id is the natural identity instead - it is what
-// consumers dedupe on - so it is the only field used.
+// equals/hashCode over every field would include the big payload and a seq that is null until the first flush, and
+// the hash would change as the relay records its attempts. The event's own id is the natural identity instead - it is
+// what consumers dedupe on - so it is the only field used.
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(onlyExplicitlyIncluded = true)
 public class OutboxEvent {
 
     // Publish order. The database assigns it (GENERATED ALWAYS AS IDENTITY), so Hibernate must leave
@@ -51,12 +54,14 @@ public class OutboxEvent {
     // reject it for a GENERATED ALWAYS column.
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @ToString.Include
     private Long seq;
 
     // The event id. Deliberately NOT generated here: it also has to be written inside the payload,
     // so whoever builds the event creates it once and uses that one value for both. A default here
     // would invite a second, different id.
     @EqualsAndHashCode.Include
+    @ToString.Include
     @Column(nullable = false, updatable = false)
     private UUID id;
 
@@ -65,6 +70,7 @@ public class OutboxEvent {
 
     // The Kafka message key (the user's id, as text).
     @Column(name = "aggregate_id", nullable = false, updatable = false)
+    @ToString.Include
     private String aggregateId;
 
     // Null only for services publishing about aggregates they don't own; user-service always sets it.
@@ -72,6 +78,7 @@ public class OutboxEvent {
     private Long aggregateVersion;
 
     @Column(name = "event_type", nullable = false, updatable = false)
+    @ToString.Include
     private String eventType;
 
     // The DB has DEFAULT 1, but Hibernate writes every mapped column explicitly, so the default has
@@ -85,11 +92,10 @@ public class OutboxEvent {
 
     // The whole event as a JSON object, held as the raw JSON text - the relay sends this string to
     // Kafka as-is. SqlTypes.JSON makes Hibernate bind it as jsonb rather than as text, which is what
-    // the column is. Excluded from toString: it carries the user's email and display name, which
-    // must never end up in a log line.
+    // the column is. Not in toString: it carries the user's email and display name, which must never end up in
+    // a log line.
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, updatable = false)
-    @ToString.Exclude
     private String payload;
 
     @Column(name = "correlation_id", updatable = false)

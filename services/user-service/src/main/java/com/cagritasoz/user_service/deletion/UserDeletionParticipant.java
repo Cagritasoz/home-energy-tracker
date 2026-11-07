@@ -6,8 +6,10 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.time.Instant;
 
@@ -17,13 +19,18 @@ import java.time.Instant;
 // native query (UserDeletionParticipantRepository.insertRequired) and the ack consumer will update them the same way.
 @Entity
 @Table(name = "user_deletion_participants")
-@Data
+@Getter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+// No setters: the entity is read-only. Identity is the composite id (a record, so it compares by value); the confirmation
+// times are state, and a row's hash must not change with them.
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString
 public class UserDeletionParticipant {
 
     @EmbeddedId
+    @EqualsAndHashCode.Include
     private UserDeletionParticipantId id;
 
     @Column(name = "acked_at")

@@ -10,13 +10,21 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
-@Data
+@Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+// Identity is the id alone: it is the Keycloak subject, assigned before the row exists and never changed, so an entity
+// keeps its hash while it is edited (a hash over the mutable fields would not). toString names the row and its state
+// and nothing else: the email and the display name must never end up in a log line.
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(onlyExplicitlyIncluded = true)
 public class User {
 
     @Id
+    @EqualsAndHashCode.Include
+    @ToString.Include
     private UUID id;
 
     @Column(nullable = false)
@@ -32,10 +40,12 @@ public class User {
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
+    @ToString.Include
     private UserStatus status = UserStatus.ACTIVE;
 
     @Version
     @Column(nullable = false)
+    @ToString.Include
     private Long version;
 
     // The deletion timestamps (V1): requested = the user asked, scheduled_for = when the grace period

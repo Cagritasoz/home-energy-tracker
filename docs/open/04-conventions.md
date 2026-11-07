@@ -30,7 +30,7 @@ A service is organised by feature, not by layer (user-service since the restruct
 
 ## Entities
 
-Lombok `@Data @Builder @NoArgsConstructor @AllArgsConstructor`; fields with defaults need `@Builder.Default`; lazy associations are excluded from `equals`, `hashCode` and `toString`.
+Lombok `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor`, never `@Data`: its `equals` and `hashCode` cover every field, so an entity's hash would change when it is edited. Identity is the assigned id alone (`@EqualsAndHashCode(onlyExplicitlyIncluded = true)` with `@EqualsAndHashCode.Include` on the id; `User` is the Keycloak subject, `OutboxEvent` its event id, `UserDeletionParticipant` its composite id). `toString` is `@ToString(onlyExplicitlyIncluded = true)` and lists ids and state only, never an email, a name or a payload. An entity that is read-only through JPA (`UserDeletionParticipant`) has no setters. Fields with defaults need `@Builder.Default`; lazy associations are excluded from `equals`, `hashCode` and `toString`.
 
 ## Outbox writer rules
 
