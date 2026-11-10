@@ -41,6 +41,10 @@
 		<!-- The standalone jar shades its own Jetty and Jackson, so it cannot clash with the Tomcat and Jackson 3
 		     that Spring Boot 4 puts on the classpath. Used to fake Keycloak's HTTP API in user-service's tests. -->
 		<wiremock.version>3.13.1</wiremock.version>
+		<!-- Reads the compiled classes of user-service in ArchitectureTest. The core library, without the JUnit engine:
+		     the rules are ordinary @Test methods, so the build does not depend on how a test engine and Spring Boot's
+		     JUnit line fit together. -->
+		<archunit.version>1.5.1</archunit.version>
 	</properties>
 
 	<!-- "When I build the root project, these projects are part of my build." -->
@@ -110,6 +114,12 @@
 				<groupId>org.wiremock</groupId>
 				<artifactId>wiremock-standalone</artifactId>
 				<version>${wiremock.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>com.tngtech.archunit</groupId>
+				<artifactId>archunit</artifactId>
+				<version>${archunit.version}</version>
 			</dependency>
 
 			<!-- Our own shared event contracts. Managed here so a service lists it without a version; every

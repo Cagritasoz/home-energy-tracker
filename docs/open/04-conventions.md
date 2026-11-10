@@ -27,6 +27,7 @@ A service is organised by feature, not by layer (user-service since the restruct
 - Tests mirror the main packages: a class's test sits in its package, so package-private members stay reachable. A test that exercises a feature end to end sits with that feature, not with the layer it passes through (a deletion flow test is in `deletion/`, not `security/`).
 - A test helper used by more than one feature's tests lives in `testsupport/<kind>/` (`config`, `containers`, `data`, `jwt`, `kafka`, `keycloak`, `web`); a helper only one feature uses stays in that feature's package (`DeletionSagaFlowSupport`; `SecuritySliceTest` is the security slice, which the interceptor's wiring test in `provisioning` also runs in).
 - Moves are done with `git mv` and as their own commit, so `git log --follow` keeps working.
+- `ArchitectureTest` (no Spring, no Docker) pins the structure. It holds a table of what each package may use and forbids everything else: `user`, `keycloak`, `consumer`, `kafka` and `security` stand alone; `outbox` uses `user`; `profile` and `deletion` build on `outbox` and `user`, `deletion` also on `keycloak`; `provisioning`, `admin` and `web` sit on top; a sub-package (`deletion.ack`, `outbox.relay`) may use its parent and the parent never knows it. Besides the table: no cycles between features, `@RestController` classes only in `admin`, `deletion` and `profile` (the `@RestControllerAdvice` only in `web`), and no package named for a layer. A new package or a new dependency between packages is a change to the table, in the same commit.
 
 ## Entities
 

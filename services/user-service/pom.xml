@@ -181,6 +181,13 @@
 		</dependency>
 
 		<dependency>
+			<!-- ArchitectureTest: the package dependencies and where the controllers live. -->
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
 			<!-- The KafkaContainer class (apache/kafka image, KRaft) for RelayIT. -->
 			<groupId>org.testcontainers</groupId>
 			<artifactId>testcontainers-kafka</artifactId>
