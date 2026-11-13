@@ -4,7 +4,7 @@ How services talk over Kafka. The producer side is built in user-service; the co
 
 ## Envelope and headers
 
-User and device events (`user.events.v1`, later `device.events.v1`, …) use the shared `contracts` module. The record value is the JSON-serialized `EventEnvelope<T>`; there are no Java class names and no `__TypeId__` header.
+User and device events (`user.events.v1`, later `device.events.v1`, …) use the shared `contracts` module. The record value is the JSON-serialized `EventEnvelope<T>`; there are no Java class names and no `__TypeId__` header. The envelope is hand-made; why, and what replaces it, is in `08-design-decisions.md`.
 
 | Envelope field | Notes |
 |---|---|

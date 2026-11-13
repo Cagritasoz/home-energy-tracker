@@ -53,7 +53,7 @@ public class ParticipantAckListener {
             id = "participant-acks",
             idIsGroup = false,
             topics = "#{@participantAcks.topics()}", // Spring Expression Language (SpEL)
-            autoStartup = "${app.user.deletion.ack-consumer.enabled:true}") // set to true, IDE displays false for some reason
+            autoStartup = "${app.user.deletion.ack-consumer.enabled:true}")
     public void onRecord(ConsumerRecord<String, String> record) {
 
         handle(record.topic(), record.value());

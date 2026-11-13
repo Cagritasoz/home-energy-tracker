@@ -27,7 +27,8 @@ public class UserProvisioningInterceptor implements HandlerInterceptor {
         if(SecurityContextHolder.getContext().getAuthentication() instanceof JwtAuthenticationToken authToken
                 && authToken.getAuthorities().stream().anyMatch(a -> CUSTOMER_AUTHORITY.equals(a.getAuthority()))) {
 
-            // TODO: Provisioning check for every single request for user API could be a bottleneck.
+            // One read of the user row per request: the price of checking the account status on every call. To be
+            // measured under load before it is optimized.
             provisioningService.ensureUsable(authToken.getToken());
 
         }

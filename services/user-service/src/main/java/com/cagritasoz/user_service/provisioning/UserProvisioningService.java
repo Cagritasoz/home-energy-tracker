@@ -67,7 +67,8 @@ public class UserProvisioningService {
 
     }
 
-    // TODO: Evaluate whether it is worth it for other services to use the found/provisioned user without firing a separate "findById" query.
+    // The user found or provisioned here is not handed on: the service behind the controller reads the row again. Left as
+    // it is until a load test shows the second read matters.
     private void ensureUsableInTransaction(Jwt token) {
 
         UUID sub = UUID.fromString(Objects.requireNonNull(token.getSubject()));

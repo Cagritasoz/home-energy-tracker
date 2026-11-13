@@ -110,14 +110,16 @@ public class SecurityConfig {
 
         OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
 
-        // Clock skew of 50 seconds instead of the default 60 seconds.
-        // OAuth2TokenValidator<Jwt> timestampValidator = new JwtTimestampValidator(Duration.ofSeconds(50));
+        // The default validators include the timestamp check with its default clock skew of 60 seconds.
 
         OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(securityProperties.requiredAudience());
 
-        // Plug in the custom audience validator with default validators.
+        // The subject is the key of the users table: anything but a UUID is rejected here as a 401.
+        OAuth2TokenValidator<Jwt> subjectValidator = new SubjectValidator();
+
+        // Plug in the custom validators with the default ones.
         decoder.setJwtValidator(
-                new DelegatingOAuth2TokenValidator<>(defaults, audienceValidator));
+                new DelegatingOAuth2TokenValidator<>(defaults, audienceValidator, subjectValidator));
 
         return decoder;
 

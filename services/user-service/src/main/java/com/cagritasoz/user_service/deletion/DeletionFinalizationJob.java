@@ -46,7 +46,7 @@ public class DeletionFinalizationJob {
 
     }
 
-    @Scheduled(fixedDelayString = "${app.user.deletion.finalizer.interval-ms}") // set to 3000, IDE displays as 86400000 for some reason.
+    @Scheduled(fixedDelayString = "${app.user.deletion.finalizer.interval-ms}")
     public void finalizeReady() {
 
         // One batch per tick, like the other jobs.
