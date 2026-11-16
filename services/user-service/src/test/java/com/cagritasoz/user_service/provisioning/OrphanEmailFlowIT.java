@@ -94,7 +94,7 @@ class OrphanEmailFlowIT {
     void emptyTablesAndStubTheToken() {
 
         jdbc.execute("TRUNCATE TABLE outbox_events, users RESTART IDENTITY CASCADE");
-        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(okJson("{\"access_token\":\"flow-token\",\"expires_in\":300}")));
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(okJson("{\"access_token\":\"flow-token\",\"expires_in\":300,\"token_type\":\"Bearer\"}")));
 
     }
 

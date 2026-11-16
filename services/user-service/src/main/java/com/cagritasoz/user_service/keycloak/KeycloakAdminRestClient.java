@@ -3,25 +3,18 @@ package com.cagritasoz.user_service.keycloak;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.retry.Retry;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
+import org.springframework.security.oauth2.client.ClientAuthorizationException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
 
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 // Keycloak's admin REST API as seen from user-service: a service-account client (user-service-admin, holding only
-// manage-users and view-users) that fetches its own access token with the client-credentials grant.
+// manage-users and view-users). The RestClient it is given already carries the access token: Spring Security's OAuth2
+// client fetches it with the client-credentials grant, caches it until shortly before it expires and puts it on every
+// request (KeycloakAdminConfig builds that client).
 //
 // Three things guard every call, in this order from the outside in:
 //   Retry          - a second attempt after a short pause, only for failures that can be transient (a timeout, a
@@ -33,15 +26,12 @@ import java.util.function.Supplier;
 // Resilience4j is used programmatically: there is no time limiter, because the calls are blocking and the timeouts
 // above already bound them (a time limiter would only abandon a thread that is still waiting).
 //
-// The access token is cached until shortly before it expires. A 401 from the admin API (the token was revoked, or
-// Keycloak restarted with new keys) throws the cached token away and counts as retryable, so the next attempt asks for
-// a fresh one.
+// A 401 from the admin API (the token was revoked, or Keycloak restarted with new keys) makes the OAuth2 client drop
+// the cached token and counts as retryable, so the next attempt asks for a fresh one.
 //
 // Nothing Keycloak sends back is ever put into an exception message or a log: an error body can quote an email
 // address. Messages carry the HTTP status or a description of the failure only.
 public class KeycloakAdminRestClient implements KeycloakAdmin {
-
-    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final RestClient restClient;
 
@@ -51,43 +41,15 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
 
     private final String realm;
 
-    private final String clientId;
-
-    private final String clientSecret;
-
-    private final Duration tokenRefreshMargin;
-
-    private final Clock clock;
-
-    // Guarded by "this": one thread at a time fetches a token, the others reuse the result.
-    private CachedToken token;
-
-    private record CachedToken(String value, Instant refreshAt) { }
-
     public KeycloakAdminRestClient(RestClient restClient,
                                    CircuitBreaker circuitBreaker,
                                    Retry retry,
-                                   String realm,
-                                   String clientId,
-                                   String clientSecret,
-                                   Duration tokenRefreshMargin,
-                                   Clock clock) {
-
-        // A missing secret would otherwise show up as a rejected token on every call, long after the start.
-        if (clientSecret == null || clientSecret.isBlank()) {
-
-            throw new IllegalArgumentException("app.keycloak.admin.client-secret must not be blank");
-
-        }
+                                   String realm) {
 
         this.restClient = restClient;
         this.circuitBreaker = circuitBreaker;
         this.retry = retry;
         this.realm = realm;
-        this.clientId = clientId;
-        this.clientSecret = clientSecret;
-        this.tokenRefreshMargin = tokenRefreshMargin;
-        this.clock = clock;
 
     }
 
@@ -162,11 +124,8 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
     }
 
     // One HTTP request to /admin/realms/{realm}/users/{id}; returns the status code, whatever it is. What the status
-    // means differs per operation, so the callers decide. A 401 is handled here because it means the token, not the
-    // operation.
+    // means differs per operation, so the callers decide.
     private int send(UUID id, boolean delete) {
-
-        String bearer = "Bearer " + accessToken();
 
         try {
 
@@ -174,16 +133,13 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
                     ? restClient.delete().uri("/admin/realms/{realm}/users/{id}", realm, id)
                     : restClient.get().uri("/admin/realms/{realm}/users/{id}", realm, id);
 
-            int status = request.header(HttpHeaders.AUTHORIZATION, bearer)
-                    .exchange((req, res) -> res.getStatusCode().value());
+            return request.exchange((req, res) -> res.getStatusCode().value());
 
-            if (status == 401) {
+        }
+        catch (ClientAuthorizationException e) {
 
-                forgetToken();
-
-            }
-
-            return status;
+            // The access token could not be obtained: thrown by the OAuth2 client before the request is sent.
+            throw tokenFailure(e);
 
         }
         catch (ResourceAccessException e) {
@@ -212,103 +168,24 @@ public class KeycloakAdminRestClient implements KeycloakAdmin {
 
     }
 
-    // synchronized because service has several callers on different threads
-    // The Keycloak deletion job scheduler thread and request threads (the orphan-email check during provisioning)
-    private synchronized String accessToken() {
+    // A token request that Keycloak answered with an error status never gets here: the token client's status handler
+    // (KeycloakAdminConfig) throws the KeycloakUnavailableException itself. What does arrive is a ClientAuthorizationException
+    // for the two failures without a status. The OAuth2 client gives both the same error code, invalid_token_response, and
+    // quotes the response in its messages, so only what it wraps is read, and neither it nor its message is passed on.
+    private KeycloakUnavailableException tokenFailure(ClientAuthorizationException e) {
 
-        Instant now = clock.instant();
+        for (Throwable cause = e.getCause(); cause != null; cause = cause.getCause()) {
 
-        if (token == null || !now.isBefore(token.refreshAt())) {
+            if (cause instanceof ResourceAccessException unreachable) {
 
-            token = fetchToken(now);
-
-        }
-
-        return token.value();
-
-    }
-
-    private synchronized void forgetToken() {
-
-        token = null;
-
-    }
-
-    private CachedToken fetchToken(Instant now) {
-
-        // In a MultiValueMap a key can hold multiple values unlike a normal HashMap where the keys value is replaced.
-        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("grant_type", "client_credentials");
-        form.add("client_id", clientId);
-        form.add("client_secret", clientSecret);
-
-        String body;
-
-        try {
-
-            body = restClient.post()
-                    .uri("/realms/{realm}/protocol/openid-connect/token", realm)
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .body(form)
-                    .exchange((req, res) -> {
-
-                        int status = res.getStatusCode().value();
-
-                        if (status != 200) {
-
-                            // A wrong secret is 401 and will not fix itself, so it is not retried; a 5xx may.
-                            throw new KeycloakUnavailableException(
-                                    "Keycloak answered " + status + " to the service account's token request", status >= 500 || status == 429);
-
-                        }
-
-                        return res.bodyTo(String.class);
-
-                    });
-
-        }
-        catch (ResourceAccessException e) {
-
-            throw new KeycloakUnavailableException("Keycloak could not be reached for a token", e, true);
-
-        }
-        catch (KeycloakUnavailableException e) {
-
-            throw e;
-
-        }
-        catch (RestClientException e) {
-
-            throw new KeycloakUnavailableException("The token request to Keycloak failed", e, false);
-
-        }
-
-        try {
-
-            JsonNode json = JSON.readTree(Objects.requireNonNull(body));
-            String value = json.path("access_token").asString("");
-            long expiresInSeconds = json.path("expires_in").asLong(60);
-
-            if (value.isBlank()) {
-
-                throw new KeycloakUnavailableException("Keycloak's token response held no access token", false);
+                // A timeout or a refused connection; the cause says which, and holds no response data.
+                return new KeycloakUnavailableException("Keycloak could not be reached for a token", unreachable, true);
 
             }
-
-            return new CachedToken(value, now.plusSeconds(expiresInSeconds).minus(tokenRefreshMargin));
-
         }
-        catch (KeycloakUnavailableException e) {
 
-            throw e;
-
-        }
-        catch (RuntimeException e) {
-
-            // Not JSON, or not the shape Keycloak documents. The body is deliberately not part of the message.
-            throw new KeycloakUnavailableException("Keycloak's token response could not be read", e, false);
-
-        }
+        // A 200 that is not a token response.
+        return new KeycloakUnavailableException("Keycloak's token response could not be read", false);
 
     }
 }

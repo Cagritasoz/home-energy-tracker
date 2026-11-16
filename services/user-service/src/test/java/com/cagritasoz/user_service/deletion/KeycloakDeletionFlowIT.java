@@ -106,7 +106,7 @@ class KeycloakDeletionFlowIT {
 
     private void tokenEndpointIssuesTokens() {
 
-        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(okJson("{\"access_token\":\"flow-token\",\"expires_in\":300}")));
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(okJson("{\"access_token\":\"flow-token\",\"expires_in\":300,\"token_type\":\"Bearer\"}")));
 
     }
 

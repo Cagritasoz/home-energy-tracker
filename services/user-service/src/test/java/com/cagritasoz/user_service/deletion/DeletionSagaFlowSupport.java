@@ -94,7 +94,7 @@ abstract class DeletionSagaFlowSupport {
 
     void tokenEndpointIssuesTokens() {
 
-        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(okJson("{\"access_token\":\"saga-token\",\"expires_in\":300}")));
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(okJson("{\"access_token\":\"saga-token\",\"expires_in\":300,\"token_type\":\"Bearer\"}")));
 
     }
 

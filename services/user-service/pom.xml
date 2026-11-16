@@ -111,6 +111,13 @@
 			<artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
 		</dependency>
 
+		<!-- Client side of OAuth2: fetches, caches and renews the access token of the service account that calls Keycloak's
+		     admin API (KeycloakAdminConfig). Nothing here logs a user in; no registration is read from the properties. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security-oauth2-client</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
