@@ -70,10 +70,11 @@ class KeycloakAdminClientIT {
     private static KeycloakAdminRestClient client(String secret) {
 
         return new KeycloakAdminRestClient(
-                KeycloakAdminConfig.restClient(baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(3)),
+                KeycloakAdminConfig.restClient(baseUrl, "energy-tracker", CLIENT_ID, secret,
+                        Duration.ofSeconds(1), Duration.ofSeconds(3), Duration.ofSeconds(30), Clock.systemUTC()),
                 KeycloakAdminConfig.circuitBreaker(10, 5, 50f, Duration.ofSeconds(30), 2),
                 KeycloakAdminConfig.retry(2, Duration.ofMillis(200)),
-                "energy-tracker", CLIENT_ID, secret, Duration.ofSeconds(30), Clock.systemUTC());
+                "energy-tracker");
 
     }
 

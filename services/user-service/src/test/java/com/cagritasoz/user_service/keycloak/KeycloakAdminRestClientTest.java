@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -16,6 +18,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.containing;
@@ -61,7 +70,7 @@ class KeycloakAdminRestClientTest {
     // A clock the tests move by hand, to step over a token's expiry without waiting for it.
     private static final class MutableClock extends Clock {
 
-        private Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        private Instant now = Instant.now();
 
         void advance(Duration duration) {
 
@@ -100,10 +109,11 @@ class KeycloakAdminRestClientTest {
     private KeycloakAdminRestClient client(int retryAttempts) {
 
         return new KeycloakAdminRestClient(
-                KeycloakAdminConfig.restClient(KEYCLOAK.baseUrl(), Duration.ofMillis(500), Duration.ofMillis(400)),
+                KeycloakAdminConfig.restClient(KEYCLOAK.baseUrl(), REALM, CLIENT_ID, CLIENT_SECRET,
+                        Duration.ofMillis(500), Duration.ofMillis(400), TOKEN_REFRESH_MARGIN, clock),
                 breaker,
                 KeycloakAdminConfig.retry(retryAttempts, Duration.ofMillis(10)),
-                REALM, CLIENT_ID, CLIENT_SECRET, TOKEN_REFRESH_MARGIN, clock);
+                REALM);
 
     }
 
@@ -155,8 +165,7 @@ class KeycloakAdminRestClientTest {
         KEYCLOAK.verify(1, postRequestedFor(urlPathEqualTo(TOKEN_PATH))
                 .withHeader("Content-Type", containing("application/x-www-form-urlencoded"))
                 .withRequestBody(containing("grant_type=client_credentials"))
-                .withRequestBody(containing("client_id=" + CLIENT_ID))
-                .withRequestBody(containing("client_secret=" + CLIENT_SECRET)));
+                .withBasicAuth(new com.github.tomakehurst.wiremock.client.BasicCredentials(CLIENT_ID, CLIENT_SECRET)));
         KEYCLOAK.verify(1, deleteRequestedFor(urlPathEqualTo(USER_PATH))
                 .withHeader("Authorization", equalTo("Bearer token-1")));
 
@@ -207,9 +216,9 @@ class KeycloakAdminRestClientTest {
     void deleteUser_adminApiRejectsTheToken_getsANewTokenAndSucceeds() {
 
         KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).inScenario("tokens").whenScenarioStateIs(Scenario.STARTED)
-                .willReturn(okJson("{\"access_token\":\"stale\",\"expires_in\":300}")).willSetStateTo("renewed"));
+                .willReturn(okJson("{\"access_token\":\"stale\",\"expires_in\":300,\"token_type\":\"Bearer\"}")).willSetStateTo("renewed"));
         KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).inScenario("tokens").whenScenarioStateIs("renewed")
-                .willReturn(okJson("{\"access_token\":\"fresh\",\"expires_in\":300}")));
+                .willReturn(okJson("{\"access_token\":\"fresh\",\"expires_in\":300,\"token_type\":\"Bearer\"}")));
         KEYCLOAK.stubFor(delete(urlPathEqualTo(USER_PATH)).withHeader("Authorization", equalTo("Bearer stale"))
                 .willReturn(aResponse().withStatus(401)));
         KEYCLOAK.stubFor(delete(urlPathEqualTo(USER_PATH)).withHeader("Authorization", equalTo("Bearer fresh"))
@@ -271,12 +280,142 @@ class KeycloakAdminRestClientTest {
 
     }
 
+    // The OAuth2 client takes no lock around the token request, so callers that find no token at the same moment each ask
+    // for one (how many is not pinned); every call still succeeds and carries a token.
+    @Test
+    void deleteUser_callersOnSeveralThreads_allSucceed() throws Exception {
+
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(
+                okJson("{\"access_token\":\"token-1\",\"expires_in\":300,\"token_type\":\"Bearer\"}").withFixedDelay(100)));
+        userDeleteAnswers(204);
+        KeycloakAdminRestClient client = client();
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> calls = new ArrayList<>();
+
+        try {
+
+            for (int i = 0; i < threads; i++) {
+
+                calls.add(pool.submit(() -> {
+
+                    start.await();
+                    client.deleteUser(USER_ID);
+                    return null;
+
+                }));
+
+            }
+
+            start.countDown();
+
+            for (Future<?> call : calls) {
+
+                assertThatCode(() -> call.get(10, TimeUnit.SECONDS)).doesNotThrowAnyException();
+
+            }
+
+        }
+        finally {
+
+            pool.shutdownNow();
+
+        }
+
+        assertThat(deleteRequests()).isEqualTo(threads);
+        assertThat(tokenRequests()).isBetween(1, threads);
+        KEYCLOAK.verify(threads, deleteRequestedFor(urlPathEqualTo(USER_PATH)).withHeader("Authorization", equalTo("Bearer token-1")));
+
+    }
+
+    // The token belongs to the service account, not to whoever is logged in on the thread: a request thread carries the
+    // caller's authentication, and the OAuth2 client would keep one token per authentication it is asked for.
+    @Test
+    void deleteUser_callersWithDifferentIdentities_shareOneToken() {
+
+        tokenEndpointIssues("token-1", 300);
+        userDeleteAnswers(204);
+        KeycloakAdminRestClient client = client();
+
+        try {
+
+            SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("alice", "n/a", "ROLE_user"));
+            client.deleteUser(USER_ID);
+            SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("bob", "n/a", "ROLE_user"));
+            client.deleteUser(USER_ID);
+
+        }
+        finally {
+
+            SecurityContextHolder.clearContext();
+
+        }
+
+        assertThat(tokenRequests()).isOne();
+
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {429, 500, 502, 503})
+    void deleteUser_tokenEndpointAnswersATransientStatus_isRetried(int status) {
+
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(aResponse().withStatus(status)));
+
+        assertThatThrownBy(() -> client().deleteUser(USER_ID))
+                .isInstanceOfSatisfying(KeycloakUnavailableException.class, e -> assertThat(e.retryable()).isTrue());
+
+        assertThat(tokenRequests()).isEqualTo(2);
+
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {400, 401, 403, 404})
+    void deleteUser_tokenEndpointAnswersAStatusThatWillNotPass_isNotRetried(int status) {
+
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(aResponse().withStatus(status)));
+
+        assertThatThrownBy(() -> client().deleteUser(USER_ID))
+                .isInstanceOfSatisfying(KeycloakUnavailableException.class, e -> assertThat(e.retryable()).isFalse());
+
+        assertThat(tokenRequests()).isOne();
+
+    }
+
+    // An error body can quote an email address; what the token endpoint said is not in the message or the cause.
+    @Test
+    void deleteUser_tokenRequestRejected_doesNotQuoteTheBody() {
+
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(aResponse().withStatus(401)
+                .withBody("{\"error\":\"invalid_client\",\"error_description\":\"someone@example.com\"}")));
+
+        assertThatThrownBy(() -> client().deleteUser(USER_ID))
+                .isInstanceOf(KeycloakUnavailableException.class)
+                .hasMessageNotContaining("someone@example.com")
+                .hasNoCause();
+
+    }
+
+    // The token request has the same timeouts as every other call (the OAuth2 client's own request has none).
+    @Test
+    void deleteUser_tokenEndpointTooSlow_timesOutOnEveryAttemptAndFails() {
+
+        KEYCLOAK.stubFor(post(urlPathEqualTo(TOKEN_PATH)).willReturn(
+                okJson("{\"access_token\":\"token-1\",\"expires_in\":300,\"token_type\":\"Bearer\"}").withFixedDelay(2000)));
+
+        assertThatThrownBy(() -> client().deleteUser(USER_ID))
+                .isInstanceOfSatisfying(KeycloakUnavailableException.class, e -> assertThat(e.retryable()).isTrue());
+
+        assertThat(tokenRequests()).isEqualTo(2);
+        assertThat(deleteRequests()).isZero();
+
+    }
+
     @Test
     void constructor_blankClientSecret_failsTheStart() {
 
-        assertThatThrownBy(() -> new KeycloakAdminRestClient(
-                KeycloakAdminConfig.restClient(KEYCLOAK.baseUrl(), Duration.ofMillis(500), Duration.ofMillis(400)),
-                breaker, KeycloakAdminConfig.retry(2, Duration.ofMillis(10)), REALM, CLIENT_ID, "  ", TOKEN_REFRESH_MARGIN, clock))
+        assertThatThrownBy(() -> KeycloakAdminConfig.restClient(KEYCLOAK.baseUrl(), REALM, CLIENT_ID, "  ",
+                Duration.ofMillis(500), Duration.ofMillis(400), TOKEN_REFRESH_MARGIN, clock))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("app.keycloak.admin.client-secret");
 
@@ -412,8 +551,9 @@ class KeycloakAdminRestClientTest {
         }
 
         KeycloakAdminRestClient client = new KeycloakAdminRestClient(
-                KeycloakAdminConfig.restClient(deadUrl, Duration.ofMillis(500), Duration.ofMillis(400)),
-                breaker, KeycloakAdminConfig.retry(2, Duration.ofMillis(10)), REALM, CLIENT_ID, CLIENT_SECRET, TOKEN_REFRESH_MARGIN, clock);
+                KeycloakAdminConfig.restClient(deadUrl, REALM, CLIENT_ID, CLIENT_SECRET,
+                        Duration.ofMillis(500), Duration.ofMillis(400), TOKEN_REFRESH_MARGIN, clock),
+                breaker, KeycloakAdminConfig.retry(2, Duration.ofMillis(10)), REALM);
 
         long started = System.nanoTime();
 
